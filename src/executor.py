@@ -22,7 +22,8 @@ class ArbExecution:
 
 class ExecutionManager:
     def __init__(self, api: KalshiAPI, positions: PositionTracker,
-                 fill_timeout_secs: int, risk_profile: RiskProfile | None = None):
+                 fill_timeout_secs: int, risk_profile: RiskProfile | None = None,
+                 max_session_loss: float = 1.0, circuit_breaker_on_any_loss: bool = True):
         self.api = api
         self.positions = positions
         self.fill_timeout_secs = fill_timeout_secs
@@ -34,8 +35,8 @@ class ExecutionManager:
         self._unwind_price_step_cents = risk_profile.unwind_price_step_cents if risk_profile else 3
         self.session_realized_loss = 0.0
         self._circuit_breaker_tripped = False
-        self._max_session_loss = 1.0
-        self._circuit_breaker_on_any_loss = True
+        self._max_session_loss = max_session_loss
+        self._circuit_breaker_on_any_loss = circuit_breaker_on_any_loss
 
     def is_event_blacklisted(self, event_ticker: str) -> bool:
         return event_ticker in self._failed_events
@@ -70,14 +71,14 @@ class ExecutionManager:
             order_list = response.get("orders", [])
             execution = ArbExecution(
                 signal=signal,
-                order_ids=[o.get("order", o).get("order_id", "") for o in order_list],
+                order_ids=[self.api.unwrap_order(o).get("order_id", "") for o in order_list],
                 started_at=time.time(),
                 batch_response=order_list,
             )
             self._active = execution
 
             for o in order_list:
-                inner = o.get("order", o)
+                inner = self.api.unwrap_order(o)
                 if inner.get("status") == "executed":
                     oid = inner.get("order_id", "")
                     price = float(inner.get("yes_price_dollars", 0))
@@ -139,16 +140,23 @@ class ExecutionManager:
             logger.critical("CIRCUIT BREAKER: session loss $%.4f >= max $%.4f", self.session_realized_loss, self._max_session_loss)
             self._circuit_breaker_tripped = True
 
-    def _parse_unwind_fill(self, resp: dict) -> tuple[str, float]:
-        order_inner = resp.get("orders", [{}])[0].get("order", resp.get("orders", [{}])[0])
-        status = order_inner.get("status", "")
-        buy_price = float(order_inner.get("yes_price_dollars", 0))
-        return status, buy_price
+    async def _execute_unwind_phase(self, ticker: str, price_cents: int, qty: int,
+                                    prev_oid: str | None) -> tuple[bool, float, str]:
+        if prev_oid:
+            await self.api.cancel_order(prev_oid)
+        order = [{"ticker": ticker, "action": "buy", "side": "yes",
+                  "type": "limit", "yes_price": price_cents, "count": qty}]
+        resp = await self.api.batch_create_orders(order)
+        inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
+        status = inner.get("status", "")
+        buy_price = float(inner.get("yes_price_dollars", 0))
+        oid = inner.get("order_id", "")
+        return status == "executed", buy_price, oid
 
     async def _unwind_partial_fill(self, execution: ArbExecution):
         filled_tickers = []
         for o in execution.batch_response:
-            inner = o.get("order", o)
+            inner = self.api.unwrap_order(o)
             if inner.get("order_id") in execution.filled:
                 filled_tickers.append((
                     inner.get("ticker", ""),
@@ -156,65 +164,33 @@ class ExecutionManager:
                     int(float(inner.get("fill_count_fp", 0))),
                 ))
 
+        step = self._unwind_price_step_cents / 100.0
+        phases = [
+            (lambda fp: min(fp + step, 0.99), 0),
+            (lambda fp: min(fp + 2 * step, 0.99), self._unwind_phase1_secs),
+            (lambda _: 0.99, self._unwind_phase2_secs - self._unwind_phase1_secs),
+        ]
+
         for ticker, fill_price, qty in filled_tickers:
             if qty <= 0:
                 continue
             logger.warning("Unwinding %d contracts of %s (filled @ %.2f)", qty, ticker, fill_price)
-
-            step = self._unwind_price_step_cents / 100.0
-
-            # Phase 1: tight limit
-            phase1_price = min(fill_price + step, 0.99)
-            phase1_order = [{
-                "ticker": ticker, "action": "buy", "side": "yes",
-                "type": "limit", "yes_price": round(phase1_price * 100), "count": qty,
-            }]
-            resp = await self.api.batch_create_orders(phase1_order)
-            status, buy_price = self._parse_unwind_fill(resp)
-            if status == "executed":
-                self._record_unwind_loss(ticker, fill_price, buy_price, qty)
-                logger.info("Unwind phase 1 filled for %s @ %.2f", ticker, phase1_price)
-                continue
-            phase1_oid = resp.get("orders", [{}])[0].get("order", {}).get("order_id", "")
-
-            if self._unwind_phase1_secs > 0:
-                await asyncio.sleep(self._unwind_phase1_secs)
-
-            # Phase 2: wider limit
-            if phase1_oid:
-                await self.api.cancel_order(phase1_oid)
-            phase2_price = min(fill_price + 2 * step, 0.99)
-            phase2_order = [{
-                "ticker": ticker, "action": "buy", "side": "yes",
-                "type": "limit", "yes_price": round(phase2_price * 100), "count": qty,
-            }]
-            resp = await self.api.batch_create_orders(phase2_order)
-            status, buy_price = self._parse_unwind_fill(resp)
-            if status == "executed":
-                self._record_unwind_loss(ticker, fill_price, buy_price, qty)
-                logger.info("Unwind phase 2 filled for %s @ %.2f", ticker, phase2_price)
-                continue
-            phase2_oid = resp.get("orders", [{}])[0].get("order", {}).get("order_id", "")
-
-            wait = self._unwind_phase2_secs - self._unwind_phase1_secs
-            if wait > 0:
-                await asyncio.sleep(wait)
-
-            # Phase 3: market order at max price
-            if phase2_oid:
-                await self.api.cancel_order(phase2_oid)
-            phase3_order = [{
-                "ticker": ticker, "action": "buy", "side": "yes",
-                "type": "limit", "yes_price": 100, "count": qty,
-            }]
-            resp = await self.api.batch_create_orders(phase3_order)
-            status, buy_price = self._parse_unwind_fill(resp)
-            if status == "executed":
-                self._record_unwind_loss(ticker, fill_price, buy_price, qty)
-            elif status == "resting":
-                self._record_unwind_loss(ticker, fill_price, 1.0, qty)
-                logger.error("Unwind phase 3 STILL RESTING for %s — loss estimated", ticker)
-            logger.warning("Unwind phase 3 for %s: %s @ $1.00", ticker, status)
+            prev_oid = None
+            for i, (price_fn, wait_secs) in enumerate(phases, 1):
+                if wait_secs > 0:
+                    await asyncio.sleep(wait_secs)
+                price = price_fn(fill_price)
+                filled, buy_price, prev_oid = await self._execute_unwind_phase(
+                    ticker, round(price * 100), qty, prev_oid)
+                if filled:
+                    self._record_unwind_loss(ticker, fill_price, buy_price, qty)
+                    logger.info("Unwind phase %d filled for %s @ %.2f", i, ticker, price)
+                    break
+            else:
+                if not filled:
+                    self._record_unwind_loss(ticker, fill_price, 0.99, qty)
+                    logger.error("Unwind phase 3 STILL RESTING for %s — loss estimated", ticker)
+                logger.warning("Unwind phase 3 for %s: status @ $0.99", ticker)
 
     def handle_fill(self, fill_data: dict):
         logger.info("WS fill event: %s", fill_data)

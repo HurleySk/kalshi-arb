@@ -6,7 +6,7 @@ from typing import Callable
 import websockets
 
 from src.auth import KalshiAuth
-from src.models import Orderbook, OrderbookLevel
+from src.models import Orderbook
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +32,14 @@ class OrderbookManager:
         return self._market_to_event.get(market_ticker)
 
     def apply_snapshot(self, ticker: str, snapshot: dict):
-        yes_bids = [
-            OrderbookLevel(price=float(p), quantity=float(q))
+        yes_bids = {
+            round(float(p) * 100): float(q)
             for p, q in snapshot.get("yes_dollars_fp", [])
-        ]
-        no_bids = [
-            OrderbookLevel(price=float(p), quantity=float(q))
+        }
+        no_bids = {
+            round(float(p) * 100): float(q)
             for p, q in snapshot.get("no_dollars_fp", [])
-        ]
+        }
         self._books[ticker] = Orderbook(yes_bids=yes_bids, no_bids=no_bids)
 
     def apply_delta(self, ticker: str, delta: dict):
@@ -47,23 +47,16 @@ class OrderbookManager:
         if book is None:
             return
 
-        price = float(delta["price_dollars"])
+        price_cents = round(float(delta["price_dollars"]) * 100)
         delta_qty = float(delta["delta_fp"])
         side = delta["side"]
         levels = book.yes_bids if side == "yes" else book.no_bids
 
-        existing = None
-        for level in levels:
-            if abs(level.price - price) < 1e-9:
-                existing = level
-                break
-
-        if existing:
-            existing.quantity += delta_qty
-            if existing.quantity <= 0:
-                levels.remove(existing)
-        elif delta_qty > 0:
-            levels.append(OrderbookLevel(price=price, quantity=delta_qty))
+        new_qty = levels.get(price_cents, 0) + delta_qty
+        if new_qty <= 0:
+            levels.pop(price_cents, None)
+        else:
+            levels[price_cents] = new_qty
 
     def get_orderbook(self, ticker: str) -> Orderbook | None:
         return self._books.get(ticker)

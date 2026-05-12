@@ -51,33 +51,16 @@ async def main():
             close_orders = []
             for ticker, qty in open_pos:
                 print(f"  {ticker}: {qty} contracts")
-                if qty < 0:
-                    close_orders.append({
-                        "ticker": ticker,
-                        "action": "buy",
-                        "side": "yes",
-                        "type": "limit",
-                        "yes_price": 100,
-                        "count": abs(qty),
-                    })
-                else:
-                    close_orders.append({
-                        "ticker": ticker,
-                        "action": "sell",
-                        "side": "yes",
-                        "type": "limit",
-                        "yes_price": 1,
-                        "count": qty,
-                    })
+                close_orders.append(api.build_close_order(ticker, qty))
 
             print(f"\nClosing {len(close_orders)} positions...")
             resp = await api.batch_create_orders(close_orders)
             for o in resp.get("orders", []):
-                inner = o.get("order", o)
+                inner = api.unwrap_order(o)
                 status = inner.get("status")
                 fill = inner.get("fill_count_fp", "0")
                 total = inner.get("initial_count_fp", "0")
-                print(f"  {inner['ticker']}: {status} (fill {fill}/{total})")
+                print(f"  {inner.get('ticker', 'unknown')}: {status} (fill {fill}/{total})")
 
         # 3. Final state
         print(f"\n=== Final state ===")

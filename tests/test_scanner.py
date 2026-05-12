@@ -1,5 +1,4 @@
 from src.scanner import OrderbookManager
-from src.models import OrderbookLevel
 
 
 def test_apply_snapshot():
@@ -72,7 +71,7 @@ def test_apply_delta_update_quantity():
     mgr.apply_delta("M1", delta)
     book = mgr.get_orderbook("M1")
     assert len(book.yes_bids) == 1
-    assert book.yes_bids[0].quantity == 70.0
+    assert book.yes_bids[40] == 70.0
 
 
 def test_get_event_orderbooks():

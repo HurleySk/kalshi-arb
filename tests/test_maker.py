@@ -2,11 +2,12 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from src.maker import MakerManager
-from src.models import TradeSignal, Orderbook, OrderbookLevel
+from src.models import TradeSignal, Orderbook
 
 
 def _make_maker(max_events=3, fill_mode="cancel_and_take"):
     api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
     api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
@@ -130,11 +131,8 @@ def test_handle_fill_tighten_on_fill():
         maker.handle_fill("mo1", "M1", 0.52, 1)
     )
 
-    # Should have cancelled the resting M2 order and reposted at tighter price
     api.cancel_order.assert_called()
-    # batch_create_orders: (1) initial post, (2) tighten phase 1, (3+) phase 2/3
     assert api.batch_create_orders.call_count >= 2
-    # Eventually cleans up (falls through to cancel_and_take at phase 3)
     assert maker.active_event_count() == 0
 
 
@@ -144,8 +142,8 @@ def test_reprice_on_bid_change():
     asyncio.get_event_loop().run_until_complete(maker.post(signal))
 
     new_books = {
-        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.53, quantity=100)], no_bids=[]),
-        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.51, quantity=100)], no_bids=[]),
+        "M1": Orderbook(yes_bids={53: 100}, no_bids={}),
+        "M2": Orderbook(yes_bids={51: 100}, no_bids={}),
     }
     asyncio.get_event_loop().run_until_complete(
         maker.on_orderbook_update("E1", new_books)
@@ -160,8 +158,8 @@ def test_invalidate_when_arb_dies():
     asyncio.get_event_loop().run_until_complete(maker.post(signal))
 
     bad_books = {
-        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=100)], no_bids=[]),
-        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.50, quantity=100)], no_bids=[]),
+        "M1": Orderbook(yes_bids={40: 100}, no_bids={}),
+        "M2": Orderbook(yes_bids={50: 100}, no_bids={}),
     }
     asyncio.get_event_loop().run_until_complete(
         maker.on_orderbook_update("E1", bad_books)
@@ -177,8 +175,8 @@ def test_reprice_throttled():
     asyncio.get_event_loop().run_until_complete(maker.post(signal))
 
     books = {
-        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.53, quantity=100)], no_bids=[]),
-        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.51, quantity=100)], no_bids=[]),
+        "M1": Orderbook(yes_bids={53: 100}, no_bids={}),
+        "M2": Orderbook(yes_bids={51: 100}, no_bids={}),
     }
     asyncio.get_event_loop().run_until_complete(maker.on_orderbook_update("E1", books))
     first_cancel_count = api.cancel_order.call_count

@@ -3,25 +3,25 @@ from enum import Enum
 
 
 @dataclass
-class OrderbookLevel:
-    price: float
-    quantity: float
-
-
-@dataclass
 class Orderbook:
-    yes_bids: list[OrderbookLevel] = field(default_factory=list)
-    no_bids: list[OrderbookLevel] = field(default_factory=list)
+    yes_bids: dict[int, float] = field(default_factory=dict)
+    no_bids: dict[int, float] = field(default_factory=dict)
 
     def best_yes_bid(self) -> float | None:
         if not self.yes_bids:
             return None
-        return max(level.price for level in self.yes_bids)
+        return max(self.yes_bids) / 100.0
 
     def best_no_bid(self) -> float | None:
         if not self.no_bids:
             return None
-        return max(level.price for level in self.no_bids)
+        return max(self.no_bids) / 100.0
+
+    def yes_bid_depth_at(self, price: float) -> float:
+        return sum(
+            qty for cents, qty in self.yes_bids.items()
+            if cents >= round(price * 100)
+        )
 
 
 @dataclass

@@ -50,34 +50,15 @@ async def close_all_positions() -> str:
         if not open_pos:
             results.append("No open positions")
         else:
-            close_orders = []
-            for ticker, qty in open_pos:
-                if qty < 0:
-                    close_orders.append({
-                        "ticker": ticker,
-                        "action": "buy",
-                        "side": "yes",
-                        "type": "limit",
-                        "yes_price": 100,
-                        "count": abs(qty),
-                    })
-                else:
-                    close_orders.append({
-                        "ticker": ticker,
-                        "action": "sell",
-                        "side": "yes",
-                        "type": "limit",
-                        "yes_price": 1,
-                        "count": qty,
-                    })
+            close_orders = [api.build_close_order(ticker, qty) for ticker, qty in open_pos]
 
             resp = await api.batch_create_orders(close_orders)
             for o in resp.get("orders", []):
-                inner = o.get("order", o)
+                inner = api.unwrap_order(o)
                 status = inner.get("status")
                 fill = inner.get("fill_count_fp", "0")
                 total = inner.get("initial_count_fp", "0")
-                results.append(f"  {inner['ticker']}: {status} (fill {fill}/{total})")
+                results.append(f"  {inner.get('ticker', 'unknown')}: {status} (fill {fill}/{total})")
             results.append(f"Sent {len(close_orders)} close orders")
 
         balance = await api.get_balance()
@@ -115,28 +96,9 @@ async def close_position(ticker: str) -> str:
         if qty == 0:
             return f"Position for {ticker} is already flat (qty=0)"
 
-        if qty < 0:
-            order = {
-                "ticker": ticker,
-                "action": "buy",
-                "side": "yes",
-                "type": "limit",
-                "yes_price": 100,
-                "count": abs(qty),
-            }
-        else:
-            order = {
-                "ticker": ticker,
-                "action": "sell",
-                "side": "yes",
-                "type": "limit",
-                "yes_price": 1,
-                "count": qty,
-            }
-
+        order = api.build_close_order(ticker, qty)
         resp = await api.batch_create_orders([order])
-        inner = resp.get("orders", [{}])[0]
-        inner = inner.get("order", inner)
+        inner = api.unwrap_order(resp.get("orders", [{}])[0])
         status = inner.get("status")
         fill = inner.get("fill_count_fp", "0")
         total = inner.get("initial_count_fp", "0")

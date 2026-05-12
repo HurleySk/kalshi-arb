@@ -9,29 +9,13 @@ logger = logging.getLogger(__name__)
 
 
 class ArbEngine:
-    def __init__(
-        self,
-        risk_profile: RiskProfile | None = None,
-        min_profit_pct: float = 1.0,
-        max_exposure_ratio: float = 3.0,
-        near_term_hours: float = 24,
-        hurdle_rate_annual_pct: float = 10.0,
-        min_bid_depth: int = 1,
-    ):
-        if risk_profile:
-            self.min_profit_pct = risk_profile.min_profit_pct
-            self.max_exposure_ratio = risk_profile.max_exposure_ratio
-            self.near_term_hours = risk_profile.near_term_hours
-            self.hurdle_rate_annual_pct = risk_profile.hurdle_rate_annual_pct
-            self.min_bid_depth = risk_profile.min_bid_depth
-            self.min_volume_24h = risk_profile.min_volume_24h
-        else:
-            self.min_profit_pct = min_profit_pct
-            self.max_exposure_ratio = max_exposure_ratio
-            self.near_term_hours = near_term_hours
-            self.hurdle_rate_annual_pct = hurdle_rate_annual_pct
-            self.min_bid_depth = min_bid_depth
-            self.min_volume_24h = 0
+    def __init__(self, risk_profile: RiskProfile):
+        self.min_profit_pct = risk_profile.min_profit_pct
+        self.max_exposure_ratio = risk_profile.max_exposure_ratio
+        self.near_term_hours = risk_profile.near_term_hours
+        self.hurdle_rate_annual_pct = risk_profile.hurdle_rate_annual_pct
+        self.min_bid_depth = risk_profile.min_bid_depth
+        self.min_volume_24h = risk_profile.min_volume_24h
         self.maker_max_exposure_ratio = 50.0
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
@@ -66,13 +50,6 @@ class ArbEngine:
 
         profit_pct = (profit / 1.0) * 100
 
-        if market_metadata:
-            days = self._days_to_expiry(market_metadata)
-            if days is not None and days > self.near_term_hours / 24:
-                annualized = profit_pct * (365 / days)
-                if annualized < self.hurdle_rate_annual_pct:
-                    return None
-
         if profit_pct < self.min_profit_pct:
             return None
 
@@ -99,8 +76,7 @@ class ArbEngine:
             if best_bid is None:
                 return None
             if self.min_bid_depth > 1:
-                total_depth = sum(level.quantity for level in book.yes_bids if level.price >= best_bid - 1e-9)
-                if total_depth < self.min_bid_depth:
+                if book.yes_bid_depth_at(best_bid) < self.min_bid_depth:
                     return None
             legs.append((ticker, best_bid))
 
@@ -129,6 +105,21 @@ class ArbEngine:
             return None
 
         profit_pct = (profit / 1.0) * 100
+
+        if profit_pct < self.min_profit_pct:
+            return None
+
+        # Maker ties up capital — require known expiry and apply hurdle rate
+        if not market_metadata:
+            return None
+        days = self._days_to_expiry(market_metadata)
+        if days is None:
+            return None
+        if days > self.near_term_hours / 24:
+            annualized = profit_pct * (365 / days)
+            if annualized < self.hurdle_rate_annual_pct:
+                return None
+
         exp_ratio = maker_exposure_ratio(bid_prices)
         if exp_ratio > self.maker_max_exposure_ratio:
             return None

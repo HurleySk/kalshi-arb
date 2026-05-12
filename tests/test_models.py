@@ -1,5 +1,4 @@
 from src.models import (
-    OrderbookLevel,
     Orderbook,
     Market,
     Event,
@@ -11,15 +10,12 @@ from src.models import (
 
 
 def test_orderbook_best_bid_returns_highest_price():
-    book = Orderbook(
-        yes_bids=[OrderbookLevel(price=0.30, quantity=100), OrderbookLevel(price=0.25, quantity=50)],
-        no_bids=[],
-    )
+    book = Orderbook(yes_bids={30: 100, 25: 50}, no_bids={})
     assert book.best_yes_bid() == 0.30
 
 
 def test_orderbook_best_bid_empty_returns_none():
-    book = Orderbook(yes_bids=[], no_bids=[])
+    book = Orderbook(yes_bids={}, no_bids={})
     assert book.best_yes_bid() is None
 
 

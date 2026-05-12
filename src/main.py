@@ -38,9 +38,9 @@ class ArbBot:
             positions=self.positions,
             fill_timeout_secs=self.cfg.fill_timeout_secs,
             risk_profile=self.risk_profile,
+            max_session_loss=self.cfg.max_session_loss,
+            circuit_breaker_on_any_loss=self.cfg.circuit_breaker_on_any_loss,
         )
-        self.executor._max_session_loss = self.cfg.max_session_loss
-        self.executor._circuit_breaker_on_any_loss = self.cfg.circuit_breaker_on_any_loss
         self.maker = MakerManager(
             api=self.api,
             fill_mode=self.cfg.maker_fill_mode,
@@ -101,7 +101,7 @@ class ArbBot:
             price = float(fill_data.get("yes_price_dollars", 0))
             quantity = int(float(fill_data.get("count_fp", 0)))
             if ticker and quantity > 0:
-                asyncio.get_event_loop().create_task(
+                asyncio.create_task(
                     self.maker.handle_fill(order_id, ticker, price, quantity)
                 )
         else:
@@ -120,7 +120,7 @@ class ArbBot:
 
         # Reprice active maker events on every orderbook update
         if self.maker and self.maker.is_event_active(event_ticker):
-            asyncio.get_event_loop().create_task(
+            asyncio.create_task(
                 self.maker.on_orderbook_update(event_ticker, event_books)
             )
 
@@ -132,7 +132,7 @@ class ArbBot:
                 return
             # If maker orders are active on this event, cancel them — taker takes over
             if self.maker and self.maker.is_event_active(event_ticker):
-                asyncio.get_event_loop().create_task(self.maker.cancel_event(event_ticker))
+                asyncio.create_task(self.maker.cancel_event(event_ticker))
             last = self._last_signal_time.get(event_ticker, 0)
             if time.time() - last < self._signal_cooldown:
                 return
@@ -149,14 +149,14 @@ class ArbBot:
                     "exposure_ratio": round(signal.exposure_ratio, 2),
                 })
             )
-            asyncio.get_event_loop().create_task(self._execute_and_track(signal))
+            asyncio.create_task(self._execute_and_track(signal))
             return
 
         # Maker layer: post on near-arb opportunities
         if self.maker and not signal:
             maker_signal = self.engine.evaluate_maker(event_ticker, event_books, market_metadata=meta)
             if maker_signal and not self.maker.is_event_active(event_ticker):
-                asyncio.get_event_loop().create_task(self._post_maker(maker_signal))
+                asyncio.create_task(self._post_maker(maker_signal))
 
     async def _validate_recent_trades(self, tickers: list[str]) -> bool:
         if not self.risk_profile.require_recent_trades:
@@ -177,14 +177,15 @@ class ArbBot:
             tickers = [t for t, _ in signal.legs]
             if not await self._validate_recent_trades(tickers):
                 return
-            await self.maker.post(signal)
-            logger.info(json.dumps({
-                "event": "maker_posted",
-                "event_ticker": signal.event_ticker,
-                "legs": signal.legs,
-                "net_profit": round(signal.net_profit, 6),
-                "profit_pct": round(signal.profit_pct, 2),
-            }))
+            posted = await self.maker.post(signal)
+            if posted:
+                logger.info(json.dumps({
+                    "event": "maker_posted",
+                    "event_ticker": signal.event_ticker,
+                    "legs": signal.legs,
+                    "net_profit": round(signal.net_profit, 6),
+                    "profit_pct": round(signal.profit_pct, 2),
+                }))
         except Exception:
             logger.exception("Failed to post maker orders for %s", signal.event_ticker)
 
@@ -221,16 +222,8 @@ class ArbBot:
             close_orders = []
             for mp in positions_resp.get("market_positions", []):
                 qty = int(float(mp.get("position_fp", "0")))
-                if qty < 0:
-                    close_orders.append({
-                        "ticker": mp["ticker"], "action": "buy", "side": "yes",
-                        "type": "limit", "yes_price": 100, "count": abs(qty),
-                    })
-                elif qty > 0:
-                    close_orders.append({
-                        "ticker": mp["ticker"], "action": "sell", "side": "yes",
-                        "type": "limit", "yes_price": 1, "count": qty,
-                    })
+                if qty != 0:
+                    close_orders.append(self.api.build_close_order(mp["ticker"], qty))
             if close_orders:
                 await self.api.batch_create_orders(close_orders)
                 logger.info("Sent %d close orders", len(close_orders))

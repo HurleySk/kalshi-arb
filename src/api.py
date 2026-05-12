@@ -138,6 +138,22 @@ class KalshiAPI:
             "count": quantity,
         }
 
+    def build_close_order(self, ticker: str, qty: int) -> dict:
+        # Kalshi API valid range: yes_price 1-99 (cents). 100 returns invalid_price error.
+        if qty < 0:
+            return {
+                "ticker": ticker, "action": "buy", "side": "yes",
+                "type": "limit", "yes_price": 99, "count": abs(qty),
+            }
+        return {
+            "ticker": ticker, "action": "sell", "side": "yes",
+            "type": "limit", "yes_price": 1, "count": qty,
+        }
+
+    @staticmethod
+    def unwrap_order(raw: dict) -> dict:
+        return raw.get("order", raw)
+
     async def batch_create_orders(self, orders: list[dict]) -> dict:
         return await self._post("/portfolio/orders/batched", {"orders": orders})
 

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.engine import ArbEngine
 from src.executor import ExecutionManager
-from src.models import Orderbook, OrderbookLevel, TradeSignal
+from src.models import Orderbook, TradeSignal
 from src.positions import PositionTracker
 from src.risk import load_risk_profile
 
@@ -22,6 +22,7 @@ def _partial_fill_executor(fill_timeout=1, mode="conservative"):
         "unwind_phase2_secs": 0,
     })
     api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
     api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
@@ -58,10 +59,8 @@ def test_phantom_liquidity_rejected_by_volume_check():
     """The MEDLAN event had bids but zero volume on the MED leg."""
     engine = _conservative_engine()
     orderbooks = {
-        "MED": Orderbook(
-            yes_bids=[OrderbookLevel(price=0.46, quantity=10)], no_bids=[]),
-        "LAN": Orderbook(
-            yes_bids=[OrderbookLevel(price=0.99, quantity=10)], no_bids=[]),
+        "MED": Orderbook(yes_bids={46: 10}, no_bids={}),
+        "LAN": Orderbook(yes_bids={99: 10}, no_bids={}),
     }
     meta = {
         "MED": {"volume_24h": 0},
@@ -119,10 +118,8 @@ def test_asymmetric_fill_rejected_conservative():
     """Conservative mode rejects arb where low-prob leg has thin depth."""
     engine = _conservative_engine()
     orderbooks = {
-        "M-FAVORITE": Orderbook(
-            yes_bids=[OrderbookLevel(price=0.99, quantity=100)], no_bids=[]),
-        "M-UNDERDOG": Orderbook(
-            yes_bids=[OrderbookLevel(price=0.46, quantity=1)], no_bids=[]),
+        "M-FAVORITE": Orderbook(yes_bids={99: 100}, no_bids={}),
+        "M-UNDERDOG": Orderbook(yes_bids={46: 1}, no_bids={}),
     }
     meta = {
         "M-FAVORITE": {"volume_24h": 500},

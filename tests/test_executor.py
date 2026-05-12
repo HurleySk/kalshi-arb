@@ -7,6 +7,7 @@ from src.risk import load_risk_profile
 
 def _make_executor(fill_timeout=5):
     api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
     api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
         "ticker": ticker,
         "action": "sell",
@@ -81,6 +82,7 @@ def _make_executor_with_profile(mode="conservative", fill_timeout=1):
         "unwind_price_step_cents": 3,
     })
     api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
     api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,

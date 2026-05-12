@@ -2,15 +2,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.engine import ArbEngine
 from src.executor import ExecutionManager
-from src.models import OrderbookLevel
+from src.models import Orderbook
 from src.positions import PositionTracker
+from src.risk import load_risk_profile
 from src.scanner import OrderbookManager
 
 
 def test_full_pipeline_detects_and_builds_orders():
     """Wire real components, feed orderbook data, verify arb detection and order building."""
     orderbook_mgr = OrderbookManager()
-    engine = ArbEngine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    engine = ArbEngine(load_risk_profile("aggressive", {"min_profit_pct": 1.0, "max_exposure_ratio": 10.0}))
     positions = PositionTracker()
 
     api = MagicMock()
@@ -58,7 +59,7 @@ def test_full_pipeline_detects_and_builds_orders():
 def test_full_pipeline_no_arb():
     """Verify pipeline correctly rejects non-profitable events."""
     orderbook_mgr = OrderbookManager()
-    engine = ArbEngine(min_profit_pct=2.0, max_exposure_ratio=3.0)
+    engine = ArbEngine(load_risk_profile("aggressive", {"min_profit_pct": 2.0, "max_exposure_ratio": 3.0}))
 
     orderbook_mgr.register_event("E1", ["M1", "M2", "M3"])
 
