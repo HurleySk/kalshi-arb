@@ -43,6 +43,7 @@ class ArbBot:
             on_orderbook_update=self._on_orderbook_update,
         )
         self._event_tickers: set[str] = set()
+        self._market_metadata: dict[str, dict] = {}
         self._last_signal_time: dict[str, float] = {}
         self._signal_cooldown = 60.0
         self._stats = {
@@ -125,41 +126,58 @@ class ArbBot:
                 realized_pnl,
             )
 
-    async def _discover_events(self):
+    def _register_events(self, events) -> list[str]:
+        new_tickers = []
+        for event in events:
+            if event.event_ticker not in self._event_tickers:
+                self._event_tickers.add(event.event_ticker)
+                market_tickers = event.market_tickers()
+                self.orderbook_mgr.register_event(event.event_ticker, market_tickers)
+                for m in event.markets:
+                    self._market_metadata[m.ticker] = {
+                        "close_time": m.close_time,
+                        "expected_expiration_time": m.expected_expiration_time,
+                    }
+                new_tickers.extend(market_tickers)
+        return new_tickers
+
+    async def _full_scan(self):
+        logger.info("Starting full event scan...")
         cursor = ""
+        pages = 0
+        total_new = 0
         while True:
             try:
                 events, next_cursor = await self.api.fetch_events_page(cursor)
-                new_tickers = []
-                for event in events:
-                    if event.event_ticker not in self._event_tickers:
-                        self._event_tickers.add(event.event_ticker)
-                        market_tickers = event.market_tickers()
-                        self.orderbook_mgr.register_event(event.event_ticker, market_tickers)
-                        new_tickers.extend(market_tickers)
-                        logger.info(
-                            "Discovered event %s (%s) with %d markets",
-                            event.event_ticker, event.title, len(market_tickers),
-                        )
-
+                new_tickers = self._register_events(events)
+                total_new += len(new_tickers)
                 if new_tickers:
                     await self.scanner.subscribe(new_tickers)
-
-                logger.info(
-                    "Event scan: %d total events tracked, %d new markets this page",
-                    len(self._event_tickers), len(new_tickers),
-                )
-
-                if next_cursor:
-                    cursor = next_cursor
-                    await asyncio.sleep(3)
-                else:
-                    cursor = ""
-                    await asyncio.sleep(self.cfg.event_poll_interval_secs)
-
+                pages += 1
+                if not next_cursor:
+                    break
+                cursor = next_cursor
+                await asyncio.sleep(0.5)
             except Exception:
-                logger.exception("Error discovering events")
-                await asyncio.sleep(self.cfg.event_poll_interval_secs)
+                logger.exception("Error during full scan at page %d", pages)
+                await asyncio.sleep(5)
+        logger.info(
+            "Full scan complete: %d pages, %d events, %d new markets",
+            pages, len(self._event_tickers), total_new,
+        )
+
+    async def _discover_events(self):
+        await self._full_scan()
+        while True:
+            await asyncio.sleep(self.cfg.event_poll_interval_secs)
+            try:
+                events, _ = await self.api.fetch_events_page("")
+                new_tickers = self._register_events(events)
+                if new_tickers:
+                    await self.scanner.subscribe(new_tickers)
+                    logger.info("Re-poll: %d new markets found", len(new_tickers))
+            except Exception:
+                logger.exception("Error during event re-poll")
 
     async def run(self):
         self._setup_logging()
