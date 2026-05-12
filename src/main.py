@@ -12,6 +12,7 @@ from src.config import load_config
 from src.engine import ArbEngine
 from src.executor import ExecutionManager
 from src.positions import PositionTracker
+from src.risk import load_risk_profile
 from src.scanner import MarketScanner, OrderbookManager
 
 logger = logging.getLogger("kalshi-arb")
@@ -27,7 +28,6 @@ class ArbBot:
         self.api = KalshiAPI(base_url=self.cfg.rest_base_url, auth=self.auth)
         self.orderbook_mgr = OrderbookManager()
 
-        from src.risk import load_risk_profile
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
 
         self.engine = ArbEngine(risk_profile=self.risk_profile)

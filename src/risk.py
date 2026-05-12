@@ -17,7 +17,7 @@ class RiskProfile:
 
 PRESETS: dict[str, dict] = {
     "conservative": {
-        "min_volume_24h": 50,
+        "min_volume_24h": 50.0,
         "min_bid_depth": 5,
         "min_profit_pct": 2.0,
         "require_recent_trades": True,
@@ -29,7 +29,7 @@ PRESETS: dict[str, dict] = {
         "unwind_price_step_cents": 3,
     },
     "moderate": {
-        "min_volume_24h": 10,
+        "min_volume_24h": 10.0,
         "min_bid_depth": 2,
         "min_profit_pct": 1.0,
         "require_recent_trades": True,
@@ -41,7 +41,7 @@ PRESETS: dict[str, dict] = {
         "unwind_price_step_cents": 5,
     },
     "aggressive": {
-        "min_volume_24h": 0,
+        "min_volume_24h": 0.0,
         "min_bid_depth": 1,
         "min_profit_pct": 0.5,
         "require_recent_trades": False,
