@@ -115,3 +115,52 @@ def test_handle_fill_unknown_order_ignored():
         maker.handle_fill("unknown", "M1", 0.52, 1)
     )
     assert api.cancel_order.call_count == 0
+
+
+def test_reprice_on_bid_change():
+    maker, api = _make_maker()
+    signal = _maker_signal()
+    asyncio.get_event_loop().run_until_complete(maker.post(signal))
+
+    new_books = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.53, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.51, quantity=100)], no_bids=[]),
+    }
+    asyncio.get_event_loop().run_until_complete(
+        maker.on_orderbook_update("E1", new_books)
+    )
+
+    api.cancel_order.assert_called()
+
+
+def test_invalidate_when_arb_dies():
+    maker, api = _make_maker()
+    signal = _maker_signal()
+    asyncio.get_event_loop().run_until_complete(maker.post(signal))
+
+    bad_books = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.50, quantity=100)], no_bids=[]),
+    }
+    asyncio.get_event_loop().run_until_complete(
+        maker.on_orderbook_update("E1", bad_books)
+    )
+
+    assert maker.active_event_count() == 0
+    api.batch_cancel_orders.assert_called()
+
+
+def test_reprice_throttled():
+    maker, api = _make_maker()
+    signal = _maker_signal()
+    asyncio.get_event_loop().run_until_complete(maker.post(signal))
+
+    books = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.53, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.51, quantity=100)], no_bids=[]),
+    }
+    asyncio.get_event_loop().run_until_complete(maker.on_orderbook_update("E1", books))
+    first_cancel_count = api.cancel_order.call_count
+
+    asyncio.get_event_loop().run_until_complete(maker.on_orderbook_update("E1", books))
+    assert api.cancel_order.call_count == first_cancel_count

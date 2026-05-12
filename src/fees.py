@@ -18,6 +18,15 @@ def maker_arb_profit(bid_prices: list[float]) -> float:
     return sum(bid_prices) - 1.0
 
 
+def maker_exposure_ratio(bid_prices: list[float]) -> float:
+    """Exposure ratio for maker orders (0% fees)."""
+    net_premium = sum(bid_prices) - 1.0
+    if net_premium <= 0:
+        return float("inf")
+    worst_loss = max(0.0, 1.0 - (sum(bid_prices) - max(bid_prices)))
+    return worst_loss / net_premium
+
+
 def exposure_ratio(bid_prices: list[float]) -> float:
     """Ratio of worst-case loss to net premium. Lower is safer."""
     premiums = sum(bid_prices)

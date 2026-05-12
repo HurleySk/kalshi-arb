@@ -129,6 +129,51 @@ class MakerManager:
 
         self._cleanup_event(event_ticker)
 
+    async def on_orderbook_update(self, event_ticker: str, orderbooks: dict):
+        event = self._active.get(event_ticker)
+        if not event:
+            return
+
+        bid_prices = []
+        for ticker in event.order_ids:
+            book = orderbooks.get(ticker)
+            if not book:
+                return
+            best_bid = book.best_yes_bid()
+            if best_bid is None:
+                await self.cancel_event(event_ticker)
+                return
+            bid_prices.append((ticker, best_bid))
+
+        gross_profit = sum(p for _, p in bid_prices) - 1.0
+        if gross_profit <= 0:
+            logger.info("Maker arb on %s no longer profitable (sum=%.2f), cancelling",
+                         event_ticker, sum(p for _, p in bid_prices))
+            await self.cancel_event(event_ticker)
+            return
+
+        now = time.time()
+        if now - event.last_reprice_time < self.REPRICE_THROTTLE_SECS:
+            return
+
+        for ticker, new_price in bid_prices:
+            old_price = event.order_prices.get(ticker, 0)
+            oid = event.order_ids.get(ticker, "")
+            if oid in event.filled:
+                continue
+            if abs(new_price - old_price) > 1e-9:
+                await self.api.cancel_order(oid)
+                new_order = [self.api.build_sell_order(ticker=ticker, yes_price=new_price, quantity=1)]
+                resp = await self.api.batch_create_orders(new_order)
+                new_inner = resp.get("orders", [{}])[0].get("order", {})
+                new_oid = new_inner.get("order_id", "")
+                self._order_to_event.pop(oid, None)
+                self._order_to_event[new_oid] = event_ticker
+                event.order_ids[ticker] = new_oid
+                event.order_prices[ticker] = new_price
+
+        event.last_reprice_time = now
+
     def _cleanup_event(self, event_ticker: str):
         event = self._active.pop(event_ticker, None)
         if event:

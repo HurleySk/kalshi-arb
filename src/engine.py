@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from src.fees import arb_profit, exposure_ratio, maker_arb_profit
+from src.fees import arb_profit, exposure_ratio, maker_arb_profit, maker_exposure_ratio
 from src.models import Orderbook, TradeSignal
 from src.risk import RiskProfile
 
@@ -128,12 +128,7 @@ class ArbEngine:
             return None
 
         profit_pct = (profit / 1.0) * 100
-        premiums = sum(bid_prices)
-        net_premium = premiums - 1.0
-        if net_premium <= 0:
-            return None
-        worst_loss = max(0.0, 1.0 - (premiums - max(bid_prices)))
-        exp_ratio = worst_loss / net_premium
+        exp_ratio = maker_exposure_ratio(bid_prices)
         if exp_ratio > self.max_exposure_ratio:
             return None
 

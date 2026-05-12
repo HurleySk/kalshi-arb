@@ -238,3 +238,13 @@ def test_evaluate_maker_respects_depth_check():
         "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
     }
     assert engine.evaluate_maker("E1", orderbooks) is None
+
+
+def test_evaluate_maker_rejects_high_exposure():
+    """2-leg at $0.51/$0.50 (sum=$1.01) has exposure ratio ~49, way above max."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.51, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.50, quantity=100)], no_bids=[]),
+    }
+    assert engine.evaluate_maker("E1", orderbooks) is None
