@@ -200,18 +200,21 @@ class ExecutionManager:
             if wait > 0:
                 await asyncio.sleep(wait)
 
-            # Phase 3: market order
+            # Phase 3: market order at max price
             if phase2_oid:
                 await self.api.cancel_order(phase2_oid)
             phase3_order = [{
                 "ticker": ticker, "action": "buy", "side": "yes",
-                "type": "limit", "yes_price": 99, "count": qty,
+                "type": "limit", "yes_price": 100, "count": qty,
             }]
             resp = await self.api.batch_create_orders(phase3_order)
             status, buy_price = self._parse_unwind_fill(resp)
             if status == "executed":
                 self._record_unwind_loss(ticker, fill_price, buy_price, qty)
-            logger.warning("Unwind phase 3 for %s: %s @ $0.99", ticker, status)
+            elif status == "resting":
+                self._record_unwind_loss(ticker, fill_price, 1.0, qty)
+                logger.error("Unwind phase 3 STILL RESTING for %s — loss estimated", ticker)
+            logger.warning("Unwind phase 3 for %s: %s @ $1.00", ticker, status)
 
     def handle_fill(self, fill_data: dict):
         logger.info("WS fill event: %s", fill_data)
@@ -226,13 +229,16 @@ class ExecutionManager:
             logger.warning("Ignoring invalid fill: ticker=%r qty=%d data=%s", ticker, quantity, fill_data)
             return
 
-        self.positions.record_fill(
-            ticker=ticker,
-            side=side,
-            price=price,
-            quantity=quantity,
-            action=action,
-        )
+        if self._active and order_id in self._active.filled:
+            logger.debug("Skipping duplicate fill for %s (already tracked from batch response)", order_id)
+        else:
+            self.positions.record_fill(
+                ticker=ticker,
+                side=side,
+                price=price,
+                quantity=quantity,
+                action=action,
+            )
 
         if self._active and order_id in self._active.order_ids:
             self._active.filled[order_id] = price

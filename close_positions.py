@@ -57,7 +57,7 @@ async def main():
                         "action": "buy",
                         "side": "yes",
                         "type": "limit",
-                        "yes_price": 99,
+                        "yes_price": 100,
                         "count": abs(qty),
                     })
                 else:

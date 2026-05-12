@@ -91,6 +91,8 @@ Taker fee: `0.07 * price * (1 - price)` per contract. All orders cross the sprea
 
 `config.yaml` (gitignored) with `mode: demo|live` and `risk_mode: conservative|moderate|aggressive`. See `config.example.yaml` for all params. Keys live at `~/.kalshi/{demo,live}_private_key.pem`.
 
+**IMPORTANT:** After any change to config parsing, risk profiles, or strategy parameters, always diff `config.yaml` against `config.example.yaml` and remove stale overrides. Old strategy fields (e.g. `min_bid_depth: 1`) silently override risk profile defaults and can neutralize new protections.
+
 ## Known Limitations
 
 - `calculate_event_pnl` in `positions.py` assumes equal fill quantities across all legs

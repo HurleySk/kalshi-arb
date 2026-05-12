@@ -58,7 +58,7 @@ async def close_all_positions() -> str:
                         "action": "buy",
                         "side": "yes",
                         "type": "limit",
-                        "yes_price": 99,
+                        "yes_price": 100,
                         "count": abs(qty),
                     })
                 else:
@@ -121,7 +121,7 @@ async def close_position(ticker: str) -> str:
                 "action": "buy",
                 "side": "yes",
                 "type": "limit",
-                "yes_price": 99,
+                "yes_price": 100,
                 "count": abs(qty),
             }
         else:

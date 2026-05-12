@@ -165,7 +165,7 @@ class ArbBot:
                 if qty < 0:
                     close_orders.append({
                         "ticker": mp["ticker"], "action": "buy", "side": "yes",
-                        "type": "limit", "yes_price": 99, "count": abs(qty),
+                        "type": "limit", "yes_price": 100, "count": abs(qty),
                     })
                 elif qty > 0:
                     close_orders.append({
