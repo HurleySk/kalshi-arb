@@ -19,7 +19,7 @@ def test_full_pipeline_detects_and_builds_orders():
         "action": "sell",
         "side": "yes",
         "type": "limit",
-        "yes_price_cents": round(yes_price * 100),
+        "yes_price": round(yes_price * 100),
         "count": quantity,
     })
 

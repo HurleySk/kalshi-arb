@@ -81,9 +81,10 @@ class ArbBot:
             asyncio.get_event_loop().create_task(self.executor.execute(signal))
 
     async def _discover_events(self):
+        cursor = ""
         while True:
             try:
-                events = await self.api.fetch_events()
+                events, next_cursor = await self.api.fetch_events_page(cursor)
                 new_tickers = []
                 for event in events:
                     if event.event_ticker not in self._event_tickers:
@@ -98,12 +99,22 @@ class ArbBot:
 
                 if new_tickers:
                     await self.scanner.subscribe(new_tickers)
-                    logger.info("Subscribed to %d new markets", len(new_tickers))
+
+                logger.info(
+                    "Event scan: %d total events tracked, %d new markets this page",
+                    len(self._event_tickers), len(new_tickers),
+                )
+
+                if next_cursor:
+                    cursor = next_cursor
+                    await asyncio.sleep(3)
+                else:
+                    cursor = ""
+                    await asyncio.sleep(self.cfg.event_poll_interval_secs)
 
             except Exception:
                 logger.exception("Error discovering events")
-
-            await asyncio.sleep(self.cfg.event_poll_interval_secs)
+                await asyncio.sleep(self.cfg.event_poll_interval_secs)
 
     async def run(self):
         self._setup_logging()

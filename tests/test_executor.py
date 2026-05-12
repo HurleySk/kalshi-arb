@@ -11,7 +11,7 @@ def _make_executor(fill_timeout=5):
         "action": "sell",
         "side": "yes",
         "type": "limit",
-        "yes_price_cents": round(yes_price * 100),
+        "yes_price": round(yes_price * 100),
         "count": quantity,
     })
     api.batch_create_orders = AsyncMock(return_value={
@@ -39,7 +39,7 @@ def test_build_orders_from_signal():
     orders = executor.build_orders(signal, quantity=10)
     assert len(orders) == 3
     assert orders[0]["ticker"] == "M1"
-    assert orders[0]["yes_price_cents"] == 40
+    assert orders[0]["yes_price"] == 40
     assert orders[0]["count"] == 10
 
 

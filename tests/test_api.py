@@ -93,5 +93,5 @@ def test_build_sell_order():
     assert order["action"] == "sell"
     assert order["side"] == "yes"
     assert order["type"] == "limit"
-    assert order["yes_price_cents"] == 55
+    assert order["yes_price"] == 55
     assert order["count"] == 10

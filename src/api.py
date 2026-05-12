@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 from typing import Any
 
 import aiohttp
@@ -8,6 +10,10 @@ from src.models import Event, Market
 
 logger = logging.getLogger(__name__)
 
+# Basic tier: 200 read tokens/sec, 100 write tokens/sec, 10 tokens per request
+# Stay well under: ~10 reads/sec, ~5 writes/sec
+MIN_REQUEST_INTERVAL = 0.1
+
 
 class KalshiAPI:
     def __init__(self, base_url: str, auth: KalshiAuth):
@@ -16,6 +22,7 @@ class KalshiAPI:
         self._sign_path_prefix = urlparse(base_url).path
         self.auth = auth
         self._session: aiohttp.ClientSession | None = None
+        self._last_request_time = 0.0
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -32,32 +39,50 @@ class KalshiAPI:
             "Content-Type": "application/json",
         }
 
-    async def _get(self, path: str, params: dict | None = None) -> dict:
+    async def _throttle(self):
+        elapsed = time.monotonic() - self._last_request_time
+        if elapsed < MIN_REQUEST_INTERVAL:
+            await asyncio.sleep(MIN_REQUEST_INTERVAL - elapsed)
+        self._last_request_time = time.monotonic()
+
+    async def _request(self, method: str, path: str, params: dict | None = None, body: dict | None = None) -> dict:
         session = await self._ensure_session()
         url = f"{self.base_url}{path}"
         sign_path = f"{self._sign_path_prefix}{path}"
-        headers = self._headers("GET", sign_path)
-        async with session.get(url, headers=headers, params=params) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        headers = self._headers(method, sign_path)
+
+        for attempt in range(3):
+            await self._throttle()
+            kwargs: dict[str, Any] = {"headers": headers}
+            if params:
+                kwargs["params"] = params
+            if body is not None:
+                kwargs["json"] = body
+
+            async with session.request(method, url, **kwargs) as resp:
+                if resp.status == 429:
+                    wait = 2 ** attempt + 1
+                    logger.warning("Rate limited (429), backing off %ds", wait)
+                    await asyncio.sleep(wait)
+                    continue
+                if resp.status >= 400:
+                    error_body = await resp.text()
+                    logger.error("API error %d %s %s: %s", resp.status, method, path, error_body)
+                    resp.raise_for_status()
+                return await resp.json()
+
+        raise aiohttp.ClientResponseError(
+            request_info=None, history=(), status=429, message="Rate limited after retries"
+        )
+
+    async def _get(self, path: str, params: dict | None = None) -> dict:
+        return await self._request("GET", path, params=params)
 
     async def _post(self, path: str, body: dict) -> dict:
-        session = await self._ensure_session()
-        url = f"{self.base_url}{path}"
-        sign_path = f"{self._sign_path_prefix}{path}"
-        headers = self._headers("POST", sign_path)
-        async with session.post(url, headers=headers, json=body) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        return await self._request("POST", path, body=body)
 
     async def _delete(self, path: str, body: dict | None = None) -> dict:
-        session = await self._ensure_session()
-        url = f"{self.base_url}{path}"
-        sign_path = f"{self._sign_path_prefix}{path}"
-        headers = self._headers("DELETE", sign_path)
-        async with session.delete(url, headers=headers, json=body) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        return await self._request("DELETE", path, body=body)
 
     def parse_events(self, raw: dict) -> list[Event]:
         events = []
@@ -87,19 +112,13 @@ class KalshiAPI:
             )
         return events
 
-    async def fetch_events(self) -> list[Event]:
-        all_events: list[Event] = []
-        cursor = ""
-        while True:
-            params: dict[str, Any] = {"with_nested_markets": "true", "limit": "100"}
-            if cursor:
-                params["cursor"] = cursor
-            raw = await self._get("/events", params=params)
-            all_events.extend(self.parse_events(raw))
-            cursor = raw.get("cursor", "")
-            if not cursor:
-                break
-        return all_events
+    async def fetch_events_page(self, cursor: str = "") -> tuple[list[Event], str]:
+        """Fetch one page of events. Returns (events, next_cursor)."""
+        params: dict[str, Any] = {"with_nested_markets": "true", "limit": "100", "status": "open"}
+        if cursor:
+            params["cursor"] = cursor
+        raw = await self._get("/events", params=params)
+        return self.parse_events(raw), raw.get("cursor", "")
 
     async def get_orderbook(self, ticker: str) -> dict:
         return await self._get(f"/markets/{ticker}/orderbook")
@@ -110,7 +129,7 @@ class KalshiAPI:
             "action": "sell",
             "side": "yes",
             "type": "limit",
-            "yes_price_cents": round(yes_price * 100),
+            "yes_price": round(yes_price * 100),
             "count": quantity,
         }
 

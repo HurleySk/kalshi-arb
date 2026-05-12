@@ -58,6 +58,8 @@ class ExecutionManager:
             self._active = execution
 
             await self._monitor_fills(execution)
+        except Exception:
+            logger.exception("Failed to execute arb on %s", signal.event_ticker)
         finally:
             self._executing = False
             self._active = None
