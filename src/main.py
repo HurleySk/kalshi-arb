@@ -112,8 +112,26 @@ class ArbBot:
             )
             asyncio.get_event_loop().create_task(self._execute_and_track(signal))
 
+    async def _validate_recent_trades(self, tickers: list[str]) -> bool:
+        if not self.risk_profile.require_recent_trades:
+            return True
+        for ticker in tickers:
+            try:
+                resp = await self.api.get_market_trades(ticker)
+                if not resp.get("trades"):
+                    logger.info("No recent trades for %s, skipping arb", ticker)
+                    return False
+            except Exception:
+                logger.exception("Failed to check recent trades for %s", ticker)
+                return False
+        return True
+
     async def _execute_and_track(self, signal):
         try:
+            tickers = [t for t, _ in signal.legs]
+            if not await self._validate_recent_trades(tickers):
+                logger.info("Recent trades check failed for %s, skipping", signal.event_ticker)
+                return
             await self.executor.execute(signal)
             self._stats["arbs_executed"] += 1
         except Exception:
