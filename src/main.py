@@ -155,6 +155,8 @@ class ArbBot:
                 events, next_cursor = await self.api.fetch_events_page(cursor)
                 all_events.extend(events)
                 pages += 1
+                if pages % 10 == 0:
+                    logger.info("Scanning page %d... (%d events collected)", pages, len(all_events))
                 if not next_cursor:
                     break
                 cursor = next_cursor
