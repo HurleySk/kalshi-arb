@@ -12,6 +12,7 @@ from src.config import load_config
 from src.engine import ArbEngine
 from src.executor import ExecutionManager
 from src.positions import PositionTracker
+from src.maker import MakerManager
 from src.risk import load_risk_profile
 from src.scanner import MarketScanner, OrderbookManager
 
@@ -40,12 +41,17 @@ class ArbBot:
         )
         self.executor._max_session_loss = self.cfg.max_session_loss
         self.executor._circuit_breaker_on_any_loss = self.cfg.circuit_breaker_on_any_loss
+        self.maker = MakerManager(
+            api=self.api,
+            fill_mode=self.cfg.maker_fill_mode,
+            max_events=self.cfg.max_maker_events,
+        ) if self.cfg.maker_enabled else None
         self.scanner = MarketScanner(
             ws_url=self.cfg.ws_url,
             auth=self.auth,
             orderbook_mgr=self.orderbook_mgr,
             on_orderbook_update=self._on_orderbook_update,
-            on_fill=self.executor.handle_fill,
+            on_fill=self._on_fill,
         )
         self._event_tickers: set[str] = set()
         self._market_metadata: dict[str, dict] = {}
@@ -85,20 +91,45 @@ class ArbBot:
         root.addHandler(handler)
         root.addHandler(console)
 
+    def _on_fill(self, fill_data: dict):
+        order_id = fill_data.get("order_id", "")
+        if self.maker and self.maker.owns_order(order_id):
+            ticker = fill_data.get("market_ticker", "")
+            price = float(fill_data.get("yes_price_dollars", 0))
+            quantity = int(float(fill_data.get("count_fp", 0)))
+            if ticker and quantity > 0:
+                asyncio.get_event_loop().create_task(
+                    self.maker.handle_fill(order_id, ticker, price, quantity)
+                )
+        else:
+            self.executor.handle_fill(fill_data)
+
     def _on_orderbook_update(self, market_ticker: str):
         event_ticker = self.orderbook_mgr.get_event_for_market(market_ticker)
         if not event_ticker:
             return
 
+        if self.executor.is_circuit_breaker_tripped():
+            return
+
         event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
         meta = {t: self._market_metadata.get(t, {}) for t in event_books}
+
+        # Reprice active maker events on every orderbook update
+        if self.maker and self.maker.is_event_active(event_ticker):
+            asyncio.get_event_loop().create_task(
+                self.maker.on_orderbook_update(event_ticker, event_books)
+            )
+
+        # Taker layer: immediate execution on fat arbs
         signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
 
         if signal and not self.executor.is_executing():
-            if self.executor.is_circuit_breaker_tripped():
-                return
             if self.executor.is_event_blacklisted(event_ticker):
                 return
+            # If maker orders are active on this event, cancel them — taker takes over
+            if self.maker and self.maker.is_event_active(event_ticker):
+                asyncio.get_event_loop().create_task(self.maker.cancel_event(event_ticker))
             last = self._last_signal_time.get(event_ticker, 0)
             if time.time() - last < self._signal_cooldown:
                 return
@@ -116,6 +147,13 @@ class ArbBot:
                 })
             )
             asyncio.get_event_loop().create_task(self._execute_and_track(signal))
+            return
+
+        # Maker layer: post on near-arb opportunities
+        if self.maker and not signal:
+            maker_signal = self.engine.evaluate_maker(event_ticker, event_books, market_metadata=meta)
+            if maker_signal and not self.maker.is_event_active(event_ticker):
+                asyncio.get_event_loop().create_task(self._post_maker(maker_signal))
 
     async def _validate_recent_trades(self, tickers: list[str]) -> bool:
         if not self.risk_profile.require_recent_trades:
@@ -130,6 +168,22 @@ class ArbBot:
                 logger.exception("Failed to check recent trades for %s", ticker)
                 return False
         return True
+
+    async def _post_maker(self, signal):
+        try:
+            tickers = [t for t, _ in signal.legs]
+            if not await self._validate_recent_trades(tickers):
+                return
+            await self.maker.post(signal)
+            logger.info(json.dumps({
+                "event": "maker_posted",
+                "event_ticker": signal.event_ticker,
+                "legs": signal.legs,
+                "net_profit": round(signal.net_profit, 6),
+                "profit_pct": round(signal.profit_pct, 2),
+            }))
+        except Exception:
+            logger.exception("Failed to post maker orders for %s", signal.event_ticker)
 
     async def _execute_and_track(self, signal):
         try:
@@ -151,6 +205,8 @@ class ArbBot:
             self.executor.session_realized_loss,
         )
         try:
+            if self.maker:
+                await self.maker.cancel_all()
             orders_resp = await self.api.get_open_orders()
             resting = [o for o in orders_resp.get("orders", [])
                        if o.get("status") in ("resting", "pending", "open")]
@@ -189,11 +245,12 @@ class ArbBot:
                 p.avg_price * p.quantity for p in positions
             )
             cb_status = "TRIPPED" if self.executor.is_circuit_breaker_tripped() else "ok"
+            maker_count = self.maker.active_event_count() if self.maker else 0
             logger.info(
                 "STATUS | uptime=%.0fs | events=%d | arbs_detected=%d | "
                 "arbs_executed=%d | arbs_failed=%d | theoretical_profit=$%.4f | "
                 "open_positions=%d | premium_collected=$%.4f | "
-                "session_loss=$%.4f | circuit_breaker=%s",
+                "session_loss=$%.4f | circuit_breaker=%s | maker_events=%d",
                 uptime,
                 len(self._event_tickers),
                 self._stats["arbs_detected"],
@@ -204,6 +261,7 @@ class ArbBot:
                 realized_pnl,
                 self.executor.session_realized_loss,
                 cb_status,
+                maker_count,
             )
 
     def _register_events(self, events) -> list[str]:
