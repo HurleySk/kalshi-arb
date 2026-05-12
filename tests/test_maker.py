@@ -117,6 +117,27 @@ def test_handle_fill_unknown_order_ignored():
     assert api.cancel_order.call_count == 0
 
 
+def test_handle_fill_tighten_on_fill():
+    """tighten_on_fill: reprices remaining legs instead of crossing spread immediately."""
+    maker, api = _make_maker(fill_mode="tighten_on_fill")
+    maker._tighten_phase1_secs = 0
+    maker._tighten_phase2_secs = 0
+    maker._tighten_step_cents = 3
+    signal = _maker_signal()
+    asyncio.get_event_loop().run_until_complete(maker.post(signal))
+
+    asyncio.get_event_loop().run_until_complete(
+        maker.handle_fill("mo1", "M1", 0.52, 1)
+    )
+
+    # Should have cancelled the resting M2 order and reposted at tighter price
+    api.cancel_order.assert_called()
+    # batch_create_orders: (1) initial post, (2) tighten phase 1, (3+) phase 2/3
+    assert api.batch_create_orders.call_count >= 2
+    # Eventually cleans up (falls through to cancel_and_take at phase 3)
+    assert maker.active_event_count() == 0
+
+
 def test_reprice_on_bid_change():
     maker, api = _make_maker()
     signal = _maker_signal()

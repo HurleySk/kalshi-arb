@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -23,13 +24,18 @@ class MakerManager:
     VALID_FILL_MODES = {"cancel_and_take", "tighten_on_fill"}
 
     def __init__(self, api: KalshiAPI, fill_mode: str = "cancel_and_take",
-                 max_events: int = 3):
+                 max_events: int = 3,
+                 tighten_phase1_secs: int = 15, tighten_phase2_secs: int = 30,
+                 tighten_step_cents: int = 3):
         self.api = api
         if fill_mode not in self.VALID_FILL_MODES:
             logger.warning("Unknown fill_mode %r, falling back to cancel_and_take", fill_mode)
             fill_mode = "cancel_and_take"
         self.fill_mode = fill_mode
         self.max_events = max_events
+        self._tighten_phase1_secs = tighten_phase1_secs
+        self._tighten_phase2_secs = tighten_phase2_secs
+        self._tighten_step_cents = tighten_step_cents
         self._active: dict[str, MakerEvent] = {}
         self._order_to_event: dict[str, str] = {}
 
@@ -106,8 +112,10 @@ class MakerManager:
             self._cleanup_event(event_ticker)
             return
 
-        # tighten_on_fill not yet implemented — falls back to cancel_and_take
-        await self._complete_cancel_and_take(event_ticker, event)
+        if self.fill_mode == "tighten_on_fill":
+            await self._complete_tighten(event_ticker, event)
+        else:
+            await self._complete_cancel_and_take(event_ticker, event)
 
     async def _complete_cancel_and_take(self, event_ticker: str, event: MakerEvent):
         unfilled_tickers = [
@@ -133,6 +141,82 @@ class MakerManager:
                          len(taker_orders), event_ticker)
 
         self._cleanup_event(event_ticker)
+
+    async def _complete_tighten(self, event_ticker: str, event: MakerEvent):
+        unfilled = [
+            (ticker, oid, event.order_prices[ticker])
+            for ticker, oid in event.order_ids.items()
+            if oid not in event.filled
+        ]
+        if not unfilled:
+            self._cleanup_event(event_ticker)
+            return
+
+        step = self._tighten_step_cents / 100.0
+
+        # Phase 1: tighten prices by one step
+        for ticker, oid, price in unfilled:
+            await self.api.cancel_order(oid)
+            new_price = max(price - step, 0.01)
+            new_order = [self.api.build_sell_order(ticker=ticker, yes_price=new_price, quantity=1)]
+            resp = await self.api.batch_create_orders(new_order)
+            inner = resp.get("orders", [{}])[0].get("order", {})
+            new_oid = inner.get("order_id", "")
+            if inner.get("status") == "executed":
+                event.filled[new_oid] = float(inner.get("yes_price_dollars", 0))
+                logger.info("Tighten phase 1 filled for %s @ %.2f", ticker, new_price)
+            else:
+                self._order_to_event.pop(oid, None)
+                self._order_to_event[new_oid] = event_ticker
+                event.order_ids[ticker] = new_oid
+                event.order_prices[ticker] = new_price
+        logger.info("Tighten phase 1: repriced %d legs on %s", len(unfilled), event_ticker)
+
+        if len(event.filled) == len(event.order_ids):
+            profit = sum(event.order_prices.values()) - 1.0
+            logger.info("ALL LEGS FILLED after tighten phase 1 on %s — profit $%.4f", event_ticker, profit)
+            self._cleanup_event(event_ticker)
+            return
+
+        if self._tighten_phase1_secs > 0:
+            await asyncio.sleep(self._tighten_phase1_secs)
+
+        # Phase 2: tighten again
+        unfilled = [
+            (ticker, event.order_ids[ticker], event.order_prices[ticker])
+            for ticker, oid in event.order_ids.items()
+            if oid not in event.filled and event.order_ids[ticker] not in event.filled
+        ]
+        for ticker, oid, price in unfilled:
+            await self.api.cancel_order(oid)
+            new_price = max(price - step, 0.01)
+            new_order = [self.api.build_sell_order(ticker=ticker, yes_price=new_price, quantity=1)]
+            resp = await self.api.batch_create_orders(new_order)
+            inner = resp.get("orders", [{}])[0].get("order", {})
+            new_oid = inner.get("order_id", "")
+            if inner.get("status") == "executed":
+                event.filled[new_oid] = float(inner.get("yes_price_dollars", 0))
+                logger.info("Tighten phase 2 filled for %s @ %.2f", ticker, new_price)
+            else:
+                self._order_to_event.pop(oid, None)
+                self._order_to_event[new_oid] = event_ticker
+                event.order_ids[ticker] = new_oid
+                event.order_prices[ticker] = new_price
+        logger.info("Tighten phase 2: repriced %d legs on %s", len(unfilled), event_ticker)
+
+        if len(event.filled) == len(event.order_ids):
+            profit = sum(event.order_prices.values()) - 1.0
+            logger.info("ALL LEGS FILLED after tighten phase 2 on %s — profit $%.4f", event_ticker, profit)
+            self._cleanup_event(event_ticker)
+            return
+
+        wait = self._tighten_phase2_secs - self._tighten_phase1_secs
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+        # Phase 3: cross the spread — cancel and take at current prices
+        logger.info("Tighten phase 3: crossing spread on %s", event_ticker)
+        await self._complete_cancel_and_take(event_ticker, event)
 
     async def on_orderbook_update(self, event_ticker: str, orderbooks: dict):
         event = self._active.get(event_ticker)

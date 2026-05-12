@@ -45,6 +45,9 @@ class ArbBot:
             api=self.api,
             fill_mode=self.cfg.maker_fill_mode,
             max_events=self.cfg.max_maker_events,
+            tighten_phase1_secs=self.risk_profile.unwind_phase1_secs,
+            tighten_phase2_secs=self.risk_profile.unwind_phase2_secs,
+            tighten_step_cents=self.risk_profile.unwind_price_step_cents,
         ) if self.cfg.maker_enabled else None
         self.scanner = MarketScanner(
             ws_url=self.cfg.ws_url,
