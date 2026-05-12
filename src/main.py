@@ -63,13 +63,15 @@ class ArbBot:
 
         class JsonFormatter(logging.Formatter):
             def format(self, record):
-                msg = record.getMessage()
-                return json.dumps({
+                d = {
                     "timestamp": self.formatTime(record),
                     "level": record.levelname,
                     "logger": record.name,
-                    "message": msg,
-                })
+                    "message": record.getMessage(),
+                }
+                if record.exc_info:
+                    d["exception"] = self.formatException(record.exc_info)
+                return json.dumps(d)
 
         handler = logging.FileHandler(self.cfg.log_file)
         handler.setFormatter(JsonFormatter())

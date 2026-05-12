@@ -100,19 +100,21 @@ class MarketScanner:
         self._running = True
         logger.info("WebSocket connected")
 
-    async def subscribe(self, market_tickers: list[str]):
+    async def subscribe(self, market_tickers: list[str], chunk_size: int = 500):
         if not self._ws:
             return
-        self._sub_id += 1
-        msg = {
-            "id": self._sub_id,
-            "cmd": "subscribe",
-            "params": {
-                "channels": ["orderbook_delta"],
-                "market_tickers": market_tickers,
-            },
-        }
-        await self._ws.send(json.dumps(msg))
+        for i in range(0, len(market_tickers), chunk_size):
+            chunk = market_tickers[i:i + chunk_size]
+            self._sub_id += 1
+            msg = {
+                "id": self._sub_id,
+                "cmd": "subscribe",
+                "params": {
+                    "channels": ["orderbook_delta"],
+                    "market_tickers": chunk,
+                },
+            }
+            await self._ws.send(json.dumps(msg))
         logger.info(f"Subscribed to orderbook_delta for {len(market_tickers)} markets")
 
     async def subscribe_fills(self):
