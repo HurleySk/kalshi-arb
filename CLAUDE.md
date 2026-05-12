@@ -45,13 +45,36 @@ WS orderbook_delta → OrderbookManager.apply_snapshot/apply_delta
       → monitor fills → cancel unfilled legs after timeout
 ```
 
+### Risk Modes (`src/risk.py`)
+
+Three configurable risk profiles control all trading thresholds. Set `risk_mode` in `config.yaml`:
+
+- **conservative** (default) — min_volume_24h=50, min_bid_depth=5, min_profit_pct=2.0%, require_recent_trades=true, max_exposure_ratio=2.0
+- **moderate** — min_volume_24h=10, min_bid_depth=2, min_profit_pct=1.0%, require_recent_trades=true, max_exposure_ratio=3.0
+- **aggressive** — min_volume_24h=0, min_bid_depth=1, min_profit_pct=0.5%, require_recent_trades=false, max_exposure_ratio=5.0
+
+Individual overrides in `config.yaml` take precedence over preset values.
+
 ### Key filtering pipeline in `ArbEngine.evaluate()`
 
 1. All markets must have a best yes bid
-2. `min_bid_depth` check (configurable, default 1)
-3. `arb_profit(bid_prices) > 0` (sum of bids > $1 + taker fees)
-4. Time-horizon check: events within `near_term_hours` (24h) use flat `min_profit_pct` (1.0%); longer-dated must beat `hurdle_rate_annual_pct` (10%) annualized
-5. `exposure_ratio <= max_exposure_ratio` (worst-case loss / net premium)
+2. `min_bid_depth` check (from risk profile)
+3. `min_volume_24h` check — rejects legs with insufficient 24h trading volume
+4. `arb_profit(bid_prices) > 0` (sum of bids > $1 + taker fees)
+5. Time-horizon check: events within `near_term_hours` (24h) use flat `min_profit_pct`; longer-dated must beat `hurdle_rate_annual_pct` annualized
+6. `exposure_ratio <= max_exposure_ratio` (worst-case loss / net premium)
+7. Async `_validate_recent_trades` — when enabled, verifies each leg has recent trade activity before execution
+
+### Partial Fill Protection
+
+On partial fill (some legs fill, others don't), the executor:
+1. Blacklists the event permanently (no re-execution)
+2. Runs tiered auto-unwind on filled legs: Phase 1 (tight limit) → Phase 2 (wider limit) → Phase 3 (market order at $0.99)
+3. Phase timings are configurable per risk mode via `unwind_phase1_secs`, `unwind_phase2_secs`, `unwind_price_step_cents`
+
+### MCP Server (`src/mcp_server.py`)
+
+Tools: `close_all_positions`, `close_position`, `get_positions`, `get_risk_profile`. Configured in `.claude/settings.local.json`.
 
 ## Fee Math
 
@@ -66,11 +89,11 @@ Taker fee: `0.07 * price * (1 - price)` per contract. All orders cross the sprea
 
 ## Config
 
-`config.yaml` (gitignored) with `mode: demo|live`. See `config.example.yaml` for all params. Keys live at `~/.kalshi/{demo,live}_private_key.pem`.
+`config.yaml` (gitignored) with `mode: demo|live` and `risk_mode: conservative|moderate|aggressive`. See `config.example.yaml` for all params. Keys live at `~/.kalshi/{demo,live}_private_key.pem`.
 
 ## Known Limitations
 
 - `calculate_event_pnl` in `positions.py` assumes equal fill quantities across all legs
 - `profit_pct` is relative to $1 max payout, not capital at risk
 - No WebSocket reconnection logic — a disconnect stops all monitoring
-- `volume_24h`, `open_interest`, `liquidity` fields are extracted from the API but not yet used for filtering
+- `open_interest`, `liquidity` fields are extracted from the API but not yet used for filtering
