@@ -36,6 +36,7 @@ class ArbBot:
             api=self.api,
             positions=self.positions,
             fill_timeout_secs=self.cfg.fill_timeout_secs,
+            risk_profile=self.risk_profile,
         )
         self.scanner = MarketScanner(
             ws_url=self.cfg.ws_url,
