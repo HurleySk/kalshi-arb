@@ -45,6 +45,13 @@ class ArbBot:
         self._event_tickers: set[str] = set()
         self._last_signal_time: dict[str, float] = {}
         self._signal_cooldown = 60.0
+        self._stats = {
+            "started_at": 0.0,
+            "arbs_detected": 0,
+            "arbs_executed": 0,
+            "arbs_failed": 0,
+            "total_theoretical_profit": 0.0,
+        }
 
     def _setup_logging(self):
         log_dir = Path(self.cfg.log_file).parent
@@ -75,6 +82,8 @@ class ArbBot:
             if time.time() - last < self._signal_cooldown:
                 return
             self._last_signal_time[event_ticker] = time.time()
+            self._stats["arbs_detected"] += 1
+            self._stats["total_theoretical_profit"] += signal.net_profit
             logger.info(
                 json.dumps({
                     "event": "arb_detected",
@@ -85,7 +94,36 @@ class ArbBot:
                     "exposure_ratio": round(signal.exposure_ratio, 2),
                 })
             )
-            asyncio.get_event_loop().create_task(self.executor.execute(signal))
+            asyncio.get_event_loop().create_task(self._execute_and_track(signal))
+
+    async def _execute_and_track(self, signal):
+        try:
+            await self.executor.execute(signal)
+            self._stats["arbs_executed"] += 1
+        except Exception:
+            self._stats["arbs_failed"] += 1
+
+    async def _report_status(self):
+        while True:
+            await asyncio.sleep(30)
+            uptime = time.time() - self._stats["started_at"]
+            positions = self.positions.open_positions()
+            realized_pnl = sum(
+                p.avg_price * p.quantity for p in positions
+            )
+            logger.info(
+                "STATUS | uptime=%.0fs | events=%d | arbs_detected=%d | "
+                "arbs_executed=%d | arbs_failed=%d | theoretical_profit=$%.4f | "
+                "open_positions=%d | premium_collected=$%.4f",
+                uptime,
+                len(self._event_tickers),
+                self._stats["arbs_detected"],
+                self._stats["arbs_executed"],
+                self._stats["arbs_failed"],
+                self._stats["total_theoretical_profit"],
+                len(positions),
+                realized_pnl,
+            )
 
     async def _discover_events(self):
         cursor = ""
@@ -125,6 +163,7 @@ class ArbBot:
 
     async def run(self):
         self._setup_logging()
+        self._stats["started_at"] = time.time()
         logger.info("Starting Kalshi Arb Bot in %s mode", self.cfg.mode.upper())
 
         await self.scanner.connect()
@@ -132,14 +171,32 @@ class ArbBot:
 
         discovery_task = asyncio.create_task(self._discover_events())
         listen_task = asyncio.create_task(self.scanner.listen())
+        status_task = asyncio.create_task(self._report_status())
 
         try:
-            await asyncio.gather(discovery_task, listen_task)
+            await asyncio.gather(discovery_task, listen_task, status_task)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
+            self._print_summary()
             await self.scanner.close()
             await self.api.close()
+
+    def _print_summary(self):
+        uptime = time.time() - self._stats["started_at"]
+        positions = self.positions.open_positions()
+        logger.info("=" * 60)
+        logger.info("SESSION SUMMARY")
+        logger.info("  Uptime: %.0f seconds", uptime)
+        logger.info("  Events tracked: %d", len(self._event_tickers))
+        logger.info("  Arbs detected: %d", self._stats["arbs_detected"])
+        logger.info("  Arbs executed: %d", self._stats["arbs_executed"])
+        logger.info("  Arbs failed: %d", self._stats["arbs_failed"])
+        logger.info("  Theoretical profit: $%.4f per contract", self._stats["total_theoretical_profit"])
+        logger.info("  Open positions: %d", len(positions))
+        for p in positions:
+            logger.info("    %s: %s %.0f @ $%.4f", p.ticker, p.side, p.quantity, p.avg_price)
+        logger.info("=" * 60)
 
 
 def main():
