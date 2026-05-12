@@ -95,6 +95,11 @@ class KalshiAPI:
                     event_ticker=m["event_ticker"],
                     title=m["title"],
                     status=m["status"],
+                    close_time=m.get("close_time", ""),
+                    expected_expiration_time=m.get("expected_expiration_time", ""),
+                    volume_24h=float(m.get("volume_24h_fp", 0)),
+                    open_interest=float(m.get("open_interest_fp", 0)),
+                    liquidity=float(m.get("liquidity_dollars", 0)),
                 )
                 for m in e.get("markets", [])
                 if m.get("status") == "active"

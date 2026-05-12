@@ -30,6 +30,11 @@ class Market:
     event_ticker: str
     title: str
     status: str
+    close_time: str = ""
+    expected_expiration_time: str = ""
+    volume_24h: float = 0.0
+    open_interest: float = 0.0
+    liquidity: float = 0.0
 
 
 @dataclass
