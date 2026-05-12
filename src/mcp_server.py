@@ -151,5 +151,60 @@ async def close_position(ticker: str) -> str:
         await api.close()
 
 
+@mcp.tool()
+async def get_positions() -> str:
+    """View all current positions and balance without making changes."""
+    api = await _get_api()
+    try:
+        positions_resp = await api.get_positions()
+        market_positions = positions_resp.get("market_positions", [])
+
+        lines = []
+        for mp in market_positions:
+            qty = float(mp.get("position_fp", "0"))
+            if qty != 0:
+                ticker = mp["ticker"]
+                exposure = mp.get("market_exposure_dollars", "0")
+                lines.append(f"  {ticker}: {int(qty)} contracts, exposure ${exposure}")
+
+        if not lines:
+            lines.append("No open positions")
+
+        balance = await api.get_balance()
+        cash = balance.get("balance", 0) / 100
+        portfolio = balance.get("portfolio_value", 0) / 100
+        lines.append(f"\nBalance: ${cash:.2f} cash, ${portfolio:.2f} portfolio")
+        return "\n".join(lines)
+    finally:
+        await api.close()
+
+
+@mcp.tool()
+async def get_risk_profile() -> str:
+    """Show the active risk profile and all thresholds."""
+    from src.risk import load_risk_profile
+    cfg = load_config(CONFIG_PATH)
+    profile = load_risk_profile(cfg.risk_mode, cfg.strategy_overrides)
+
+    lines = [
+        f"Risk mode: {cfg.risk_mode}",
+        f"  min_volume_24h: {profile.min_volume_24h}",
+        f"  min_bid_depth: {profile.min_bid_depth}",
+        f"  min_profit_pct: {profile.min_profit_pct}%",
+        f"  require_recent_trades: {profile.require_recent_trades}",
+        f"  max_exposure_ratio: {profile.max_exposure_ratio}",
+        f"  near_term_hours: {profile.near_term_hours}",
+        f"  hurdle_rate_annual_pct: {profile.hurdle_rate_annual_pct}%",
+        f"  unwind_phase1_secs: {profile.unwind_phase1_secs}",
+        f"  unwind_phase2_secs: {profile.unwind_phase2_secs}",
+        f"  unwind_price_step_cents: {profile.unwind_price_step_cents}",
+    ]
+
+    if cfg.strategy_overrides:
+        lines.append(f"\nOverrides applied: {cfg.strategy_overrides}")
+
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     mcp.run()
