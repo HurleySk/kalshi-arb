@@ -17,6 +17,7 @@ class PositionTracker:
         self._positions: dict[str, TrackedPosition] = {}
 
     def record_fill(self, ticker: str, side: str, price: float, quantity: float, action: str):
+        # Only supports accumulation of same-direction fills (sell-yes arb strategy)
         if ticker in self._positions:
             pos = self._positions[ticker]
             total_cost = pos.avg_price * pos.quantity + price * quantity
@@ -38,6 +39,7 @@ class PositionTracker:
         return [p for p in self._positions.values() if p.quantity > 0]
 
     def calculate_event_pnl(self, tickers: list[str]) -> dict:
+        # Assumes equal fill quantities across all legs; inaccurate for partial fills
         total_premium = 0.0
         max_quantity = 0.0
         for t in tickers:
