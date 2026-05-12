@@ -44,6 +44,7 @@ class ArbBot:
             auth=self.auth,
             orderbook_mgr=self.orderbook_mgr,
             on_orderbook_update=self._on_orderbook_update,
+            on_fill=self.executor.handle_fill,
         )
         self._event_tickers: set[str] = set()
         self._market_metadata: dict[str, dict] = {}
@@ -93,6 +94,8 @@ class ArbBot:
         signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
 
         if signal and not self.executor.is_executing():
+            if self.executor.is_event_blacklisted(event_ticker):
+                return
             last = self._last_signal_time.get(event_ticker, 0)
             if time.time() - last < self._signal_cooldown:
                 return

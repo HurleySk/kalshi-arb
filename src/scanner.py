@@ -85,11 +85,13 @@ class MarketScanner:
         auth: KalshiAuth,
         orderbook_mgr: OrderbookManager,
         on_orderbook_update: Callable[[str], None] | None = None,
+        on_fill: Callable[[dict], None] | None = None,
     ):
         self.ws_url = ws_url
         self.auth = auth
         self.orderbook_mgr = orderbook_mgr
         self.on_orderbook_update = on_orderbook_update
+        self.on_fill = on_fill
         self._ws = None
         self._sub_id = 0
         self._running = False
@@ -149,6 +151,10 @@ class MarketScanner:
                     self.orderbook_mgr.apply_delta(ticker, data["msg"])
                     if self.on_orderbook_update:
                         self.on_orderbook_update(ticker)
+
+                elif msg_type == "fill":
+                    if self.on_fill:
+                        self.on_fill(data["msg"])
 
             except websockets.ConnectionClosed:
                 logger.warning("WebSocket disconnected")

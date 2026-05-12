@@ -25,6 +25,10 @@ class ExecutionManager:
         self.fill_timeout_secs = fill_timeout_secs
         self._executing = False
         self._active: ArbExecution | None = None
+        self._failed_events: set[str] = set()
+
+    def is_event_blacklisted(self, event_ticker: str) -> bool:
+        return event_ticker in self._failed_events
 
     def is_executing(self) -> bool:
         return self._executing
@@ -58,6 +62,21 @@ class ExecutionManager:
             )
             self._active = execution
 
+            for o in order_list:
+                inner = o.get("order", o)
+                if inner.get("status") == "executed":
+                    oid = inner.get("order_id", "")
+                    price = float(inner.get("yes_price_dollars", 0))
+                    qty = int(float(inner.get("fill_count_fp", 0)))
+                    execution.filled[oid] = price
+                    self.positions.record_fill(
+                        ticker=inner.get("ticker", ""),
+                        side=inner.get("side", "yes"),
+                        price=price,
+                        quantity=qty,
+                        action=inner.get("action", "sell"),
+                    )
+
             await self._monitor_fills(execution)
         except Exception:
             logger.exception("Failed to execute arb on %s", signal.event_ticker)
@@ -77,11 +96,19 @@ class ExecutionManager:
             oid for oid in execution.order_ids if oid not in execution.filled
         ]
         if unfilled:
+            filled_count = len(execution.filled)
+            total_count = len(execution.order_ids)
             logger.warning(
-                "Timeout: %d unfilled legs for %s, cancelling",
-                len(unfilled), execution.signal.event_ticker,
+                "Timeout: %d/%d legs filled for %s, cancelling %d unfilled",
+                filled_count, total_count, execution.signal.event_ticker, len(unfilled),
             )
             await self.api.batch_cancel_orders(unfilled)
+            if filled_count > 0:
+                logger.error(
+                    "PARTIAL FILL on %s: %d legs filled, %d cancelled — UNHEDGED EXPOSURE",
+                    execution.signal.event_ticker, filled_count, len(unfilled),
+                )
+                self._failed_events.add(execution.signal.event_ticker)
 
     def handle_fill(self, fill_data: dict):
         order_id = fill_data.get("order_id", "")
