@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass, field
 
 from src.api import KalshiAPI
-from src.models import TradeSignal, OrderStatus
+from src.models import TradeSignal
 from src.positions import PositionTracker
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class ExecutionManager:
             order_list = response.get("orders", [])
             execution = ArbExecution(
                 signal=signal,
-                order_ids=[o.get("order_id", o.get("id", "")) for o in order_list],
+                order_ids=[o.get("order", o).get("order_id", "") for o in order_list],
                 started_at=time.time(),
             )
             self._active = execution

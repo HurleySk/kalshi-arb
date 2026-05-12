@@ -61,10 +61,18 @@ class ArbBot:
         log_dir = Path(self.cfg.log_file).parent
         log_dir.mkdir(parents=True, exist_ok=True)
 
+        class JsonFormatter(logging.Formatter):
+            def format(self, record):
+                msg = record.getMessage()
+                return json.dumps({
+                    "timestamp": self.formatTime(record),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": msg,
+                })
+
         handler = logging.FileHandler(self.cfg.log_file)
-        handler.setFormatter(logging.Formatter(
-            '{"timestamp":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","message":%(message)s}'
-        ))
+        handler.setFormatter(JsonFormatter())
         console = logging.StreamHandler()
         console.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 
@@ -106,6 +114,7 @@ class ArbBot:
             await self.executor.execute(signal)
             self._stats["arbs_executed"] += 1
         except Exception:
+            logger.exception("Failed to execute arb for %s", signal.event_ticker)
             self._stats["arbs_failed"] += 1
 
     async def _report_status(self):
@@ -137,12 +146,12 @@ class ArbBot:
                 self._event_tickers.add(event.event_ticker)
                 market_tickers = event.market_tickers()
                 self.orderbook_mgr.register_event(event.event_ticker, market_tickers)
-                for m in event.markets:
-                    self._market_metadata[m.ticker] = {
-                        "close_time": m.close_time,
-                        "expected_expiration_time": m.expected_expiration_time,
-                    }
                 new_tickers.extend(market_tickers)
+            for m in event.markets:
+                self._market_metadata[m.ticker] = {
+                    "close_time": m.close_time,
+                    "expected_expiration_time": m.expected_expiration_time,
+                }
         return new_tickers
 
     async def _full_scan(self):
@@ -177,12 +186,12 @@ class ArbBot:
             return min(times) if times else "9999"
 
         all_events.sort(key=_earliest_close)
-        total_new = 0
+        all_new_tickers = []
         for event in all_events:
-            new_tickers = self._register_events([event])
-            total_new += len(new_tickers)
-            if new_tickers:
-                await self.scanner.subscribe(new_tickers)
+            all_new_tickers.extend(self._register_events([event]))
+        if all_new_tickers:
+            await self.scanner.subscribe(all_new_tickers)
+        total_new = len(all_new_tickers)
 
         logger.info(
             "Full scan complete: %d pages, %d events, %d new markets (sorted by close_time)",

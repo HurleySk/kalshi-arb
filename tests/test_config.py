@@ -73,3 +73,20 @@ def test_load_config_invalid_mode():
         except ValueError:
             pass
     os.unlink(f.name)
+
+
+def test_load_config_custom_strategy_params():
+    import copy
+    custom = copy.deepcopy(SAMPLE_CONFIG)
+    custom["strategy"]["near_term_hours"] = 48
+    custom["strategy"]["hurdle_rate_annual_pct"] = 15.0
+    custom["strategy"]["min_bid_depth"] = 100
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(custom, f)
+        f.flush()
+        cfg = load_config(f.name)
+    os.unlink(f.name)
+
+    assert cfg.near_term_hours == 48
+    assert cfg.hurdle_rate_annual_pct == 15.0
+    assert cfg.min_bid_depth == 100

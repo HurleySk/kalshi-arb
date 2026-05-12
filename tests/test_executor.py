@@ -16,9 +16,9 @@ def _make_executor(fill_timeout=5):
     })
     api.batch_create_orders = AsyncMock(return_value={
         "orders": [
-            {"order_id": "o1", "ticker": "M1", "status": "open"},
-            {"order_id": "o2", "ticker": "M2", "status": "open"},
-            {"order_id": "o3", "ticker": "M3", "status": "open"},
+            {"order": {"order_id": "o1", "ticker": "M1", "status": "open"}},
+            {"order": {"order_id": "o2", "ticker": "M2", "status": "open"}},
+            {"order": {"order_id": "o3", "ticker": "M3", "status": "open"}},
         ]
     })
     api.batch_cancel_orders = AsyncMock(return_value={})
