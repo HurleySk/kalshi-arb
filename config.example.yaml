@@ -12,6 +12,8 @@ strategy:
   risk_mode: conservative    # conservative | moderate | aggressive
   fill_timeout_secs: 30
   event_poll_interval_secs: 60
+  max_session_loss: 1.0              # Stop trading if cumulative loss exceeds this ($)
+  circuit_breaker_on_any_loss: true   # Stop on ANY loss (default: true) — any loss means a bug
   # Optional overrides (uncomment to customize):
   # min_volume_24h: 50
   # min_bid_depth: 5

@@ -17,7 +17,8 @@ class PositionTracker:
         self._positions: dict[str, TrackedPosition] = {}
 
     def record_fill(self, ticker: str, side: str, price: float, quantity: float, action: str):
-        # Only supports accumulation of same-direction fills (sell-yes arb strategy)
+        if quantity <= 0:
+            return
         if ticker in self._positions:
             pos = self._positions[ticker]
             total_cost = pos.avg_price * pos.quantity + price * quantity

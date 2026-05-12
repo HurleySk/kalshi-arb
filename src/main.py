@@ -38,6 +38,8 @@ class ArbBot:
             fill_timeout_secs=self.cfg.fill_timeout_secs,
             risk_profile=self.risk_profile,
         )
+        self.executor._max_session_loss = self.cfg.max_session_loss
+        self.executor._circuit_breaker_on_any_loss = self.cfg.circuit_breaker_on_any_loss
         self.scanner = MarketScanner(
             ws_url=self.cfg.ws_url,
             auth=self.auth,
@@ -93,6 +95,8 @@ class ArbBot:
         signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
 
         if signal and not self.executor.is_executing():
+            if self.executor.is_circuit_breaker_tripped():
+                return
             if self.executor.is_event_blacklisted(event_ticker):
                 return
             last = self._last_signal_time.get(event_ticker, 0)
@@ -135,9 +139,46 @@ class ArbBot:
                 return
             await self.executor.execute(signal)
             self._stats["arbs_executed"] += 1
+            if self.executor.is_circuit_breaker_tripped():
+                await self._emergency_shutdown()
         except Exception:
             logger.exception("Failed to execute arb for %s", signal.event_ticker)
             self._stats["arbs_failed"] += 1
+
+    async def _emergency_shutdown(self):
+        logger.critical(
+            "CIRCUIT BREAKER TRIPPED — session loss: $%.4f. Cancelling all orders and closing positions.",
+            self.executor.session_realized_loss,
+        )
+        try:
+            orders_resp = await self.api.get_open_orders()
+            resting = [o for o in orders_resp.get("orders", [])
+                       if o.get("status") in ("resting", "pending", "open")]
+            if resting:
+                await self.api.batch_cancel_orders([o["order_id"] for o in resting])
+                logger.info("Cancelled %d open orders", len(resting))
+
+            positions_resp = await self.api.get_positions()
+            close_orders = []
+            for mp in positions_resp.get("market_positions", []):
+                qty = int(float(mp.get("position_fp", "0")))
+                if qty < 0:
+                    close_orders.append({
+                        "ticker": mp["ticker"], "action": "buy", "side": "yes",
+                        "type": "limit", "yes_price": 99, "count": abs(qty),
+                    })
+                elif qty > 0:
+                    close_orders.append({
+                        "ticker": mp["ticker"], "action": "sell", "side": "yes",
+                        "type": "limit", "yes_price": 1, "count": qty,
+                    })
+            if close_orders:
+                await self.api.batch_create_orders(close_orders)
+                logger.info("Sent %d close orders", len(close_orders))
+            else:
+                logger.info("No positions to close")
+        except Exception:
+            logger.exception("Error during emergency shutdown")
 
     async def _report_status(self):
         while True:
@@ -147,10 +188,12 @@ class ArbBot:
             realized_pnl = sum(
                 p.avg_price * p.quantity for p in positions
             )
+            cb_status = "TRIPPED" if self.executor.is_circuit_breaker_tripped() else "ok"
             logger.info(
                 "STATUS | uptime=%.0fs | events=%d | arbs_detected=%d | "
                 "arbs_executed=%d | arbs_failed=%d | theoretical_profit=$%.4f | "
-                "open_positions=%d | premium_collected=$%.4f",
+                "open_positions=%d | premium_collected=$%.4f | "
+                "session_loss=$%.4f | circuit_breaker=%s",
                 uptime,
                 len(self._event_tickers),
                 self._stats["arbs_detected"],
@@ -159,6 +202,8 @@ class ArbBot:
                 self._stats["total_theoretical_profit"],
                 len(positions),
                 realized_pnl,
+                self.executor.session_realized_loss,
+                cb_status,
             )
 
     def _register_events(self, events) -> list[str]:

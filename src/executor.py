@@ -32,9 +32,16 @@ class ExecutionManager:
         self._unwind_phase1_secs = risk_profile.unwind_phase1_secs if risk_profile else 15
         self._unwind_phase2_secs = risk_profile.unwind_phase2_secs if risk_profile else 30
         self._unwind_price_step_cents = risk_profile.unwind_price_step_cents if risk_profile else 3
+        self.session_realized_loss = 0.0
+        self._circuit_breaker_tripped = False
+        self._max_session_loss = 1.0
+        self._circuit_breaker_on_any_loss = True
 
     def is_event_blacklisted(self, event_ticker: str) -> bool:
         return event_ticker in self._failed_events
+
+    def is_circuit_breaker_tripped(self) -> bool:
+        return self._circuit_breaker_tripped
 
     def is_executing(self) -> bool:
         return self._executing
@@ -118,6 +125,26 @@ class ExecutionManager:
                 self._failed_events.add(execution.signal.event_ticker)
                 await self._unwind_partial_fill(execution)
 
+    def _record_unwind_loss(self, ticker: str, sell_price: float, buy_price: float, qty: int):
+        loss = (buy_price - sell_price) * qty
+        self.session_realized_loss += loss
+        logger.error(
+            "UNWIND LOSS: %s sold@%.2f bought@%.2f qty=%d loss=$%.4f (session total: $%.4f)",
+            ticker, sell_price, buy_price, qty, loss, self.session_realized_loss,
+        )
+        if self._circuit_breaker_on_any_loss and loss > 0:
+            logger.critical("CIRCUIT BREAKER: any-loss mode triggered by $%.4f loss on %s", loss, ticker)
+            self._circuit_breaker_tripped = True
+        elif self.session_realized_loss >= self._max_session_loss:
+            logger.critical("CIRCUIT BREAKER: session loss $%.4f >= max $%.4f", self.session_realized_loss, self._max_session_loss)
+            self._circuit_breaker_tripped = True
+
+    def _parse_unwind_fill(self, resp: dict) -> tuple[str, float]:
+        order_inner = resp.get("orders", [{}])[0].get("order", resp.get("orders", [{}])[0])
+        status = order_inner.get("status", "")
+        buy_price = float(order_inner.get("yes_price_dollars", 0))
+        return status, buy_price
+
     async def _unwind_partial_fill(self, execution: ArbExecution):
         filled_tickers = []
         for o in execution.batch_response:
@@ -143,11 +170,12 @@ class ExecutionManager:
                 "type": "limit", "yes_price": round(phase1_price * 100), "count": qty,
             }]
             resp = await self.api.batch_create_orders(phase1_order)
-            order_inner = resp.get("orders", [{}])[0].get("order", resp.get("orders", [{}])[0])
-            if order_inner.get("status") == "executed":
+            status, buy_price = self._parse_unwind_fill(resp)
+            if status == "executed":
+                self._record_unwind_loss(ticker, fill_price, buy_price, qty)
                 logger.info("Unwind phase 1 filled for %s @ %.2f", ticker, phase1_price)
                 continue
-            phase1_oid = order_inner.get("order_id", "")
+            phase1_oid = resp.get("orders", [{}])[0].get("order", {}).get("order_id", "")
 
             if self._unwind_phase1_secs > 0:
                 await asyncio.sleep(self._unwind_phase1_secs)
@@ -161,11 +189,12 @@ class ExecutionManager:
                 "type": "limit", "yes_price": round(phase2_price * 100), "count": qty,
             }]
             resp = await self.api.batch_create_orders(phase2_order)
-            order_inner = resp.get("orders", [{}])[0].get("order", resp.get("orders", [{}])[0])
-            if order_inner.get("status") == "executed":
+            status, buy_price = self._parse_unwind_fill(resp)
+            if status == "executed":
+                self._record_unwind_loss(ticker, fill_price, buy_price, qty)
                 logger.info("Unwind phase 2 filled for %s @ %.2f", ticker, phase2_price)
                 continue
-            phase2_oid = order_inner.get("order_id", "")
+            phase2_oid = resp.get("orders", [{}])[0].get("order", {}).get("order_id", "")
 
             wait = self._unwind_phase2_secs - self._unwind_phase1_secs
             if wait > 0:
@@ -179,16 +208,23 @@ class ExecutionManager:
                 "type": "limit", "yes_price": 99, "count": qty,
             }]
             resp = await self.api.batch_create_orders(phase3_order)
-            order_inner = resp.get("orders", [{}])[0].get("order", resp.get("orders", [{}])[0])
-            logger.warning("Unwind phase 3 for %s: %s @ $0.99", ticker, order_inner.get("status"))
+            status, buy_price = self._parse_unwind_fill(resp)
+            if status == "executed":
+                self._record_unwind_loss(ticker, fill_price, buy_price, qty)
+            logger.warning("Unwind phase 3 for %s: %s @ $0.99", ticker, status)
 
     def handle_fill(self, fill_data: dict):
+        logger.info("WS fill event: %s", fill_data)
         order_id = fill_data.get("order_id", "")
-        ticker = fill_data.get("ticker", "")
-        price = float(fill_data.get("yes_price_cents", 0)) / 100.0
-        quantity = int(fill_data.get("count", 0))
+        ticker = fill_data.get("market_ticker", "")
+        price = float(fill_data.get("yes_price_dollars", 0))
+        quantity = int(float(fill_data.get("count_fp", 0)))
         action = fill_data.get("action", "sell")
-        side = fill_data.get("side", "yes")
+        side = fill_data.get("outcome_side", fill_data.get("side", "yes"))
+
+        if not ticker or quantity <= 0:
+            logger.warning("Ignoring invalid fill: ticker=%r qty=%d data=%s", ticker, quantity, fill_data)
+            return
 
         self.positions.record_fill(
             ticker=ticker,

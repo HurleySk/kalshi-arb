@@ -25,6 +25,8 @@ class Config:
     strategy_overrides: dict
     fill_timeout_secs: int
     event_poll_interval_secs: int
+    max_session_loss: float
+    circuit_breaker_on_any_loss: bool
     log_level: str
     log_file: str
 
@@ -72,6 +74,8 @@ def load_config(path: str) -> Config:
         strategy_overrides=strategy_overrides,
         fill_timeout_secs=strategy.get("fill_timeout_secs", 30),
         event_poll_interval_secs=strategy.get("event_poll_interval_secs", 60),
+        max_session_loss=float(strategy.get("max_session_loss", 1.0)),
+        circuit_breaker_on_any_loss=strategy.get("circuit_breaker_on_any_loss", True),
         log_level=logging_cfg.get("level", "INFO"),
         log_file=logging_cfg.get("file", "logs/arb_bot.log"),
     )
