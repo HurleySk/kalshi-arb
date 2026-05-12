@@ -60,6 +60,8 @@ class ArbBot:
         self._market_metadata: dict[str, dict] = {}
         self._last_signal_time: dict[str, float] = {}
         self._signal_cooldown = 60.0
+        self._maker_queue: asyncio.Queue | None = None
+        self._maker_dirty_events: set[str] = set()
         self._stats = {
             "started_at": 0.0,
             "arbs_detected": 0,
@@ -118,19 +120,12 @@ class ArbBot:
         event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
         meta = {t: self._market_metadata.get(t, {}) for t in event_books}
 
-        # Reprice active maker events on every orderbook update
-        if self.maker and self.maker.is_event_active(event_ticker):
-            asyncio.create_task(
-                self.maker.on_orderbook_update(event_ticker, event_books)
-            )
-
         # Taker layer: immediate execution on fat arbs
         signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
 
         if signal and not self.executor.is_executing():
             if self.executor.is_event_blacklisted(event_ticker):
                 return
-            # If maker orders are active on this event, cancel them — taker takes over
             if self.maker and self.maker.is_event_active(event_ticker):
                 asyncio.create_task(self.maker.cancel_event(event_ticker))
             last = self._last_signal_time.get(event_ticker, 0)
@@ -152,11 +147,14 @@ class ArbBot:
             asyncio.create_task(self._execute_and_track(signal))
             return
 
-        # Maker layer: post on near-arb opportunities
+        # Signal maker worker that this event needs attention
         if self.maker and not signal:
-            maker_signal = self.engine.evaluate_maker(event_ticker, event_books, market_metadata=meta)
-            if maker_signal and not self.maker.is_event_active(event_ticker):
-                asyncio.create_task(self._post_maker(maker_signal))
+            self._maker_dirty_events.add(event_ticker)
+            if self._maker_queue and not self._maker_queue.full():
+                try:
+                    self._maker_queue.put_nowait(True)
+                except asyncio.QueueFull:
+                    pass
 
     async def _validate_recent_trades(self, tickers: list[str]) -> bool:
         if not self.risk_profile.require_recent_trades:
@@ -172,22 +170,52 @@ class ArbBot:
                 return False
         return True
 
-    async def _post_maker(self, signal):
-        try:
-            tickers = [t for t, _ in signal.legs]
-            if not await self._validate_recent_trades(tickers):
-                return
-            posted = await self.maker.post(signal)
-            if posted:
-                logger.info(json.dumps({
-                    "event": "maker_posted",
-                    "event_ticker": signal.event_ticker,
-                    "legs": signal.legs,
-                    "net_profit": round(signal.net_profit, 6),
-                    "profit_pct": round(signal.profit_pct, 2),
-                }))
-        except Exception:
-            logger.exception("Failed to post maker orders for %s", signal.event_ticker)
+    async def _maker_worker(self):
+        self._maker_queue = asyncio.Queue(maxsize=1)
+        failed_until: dict[str, float] = {}
+        while True:
+            await self._maker_queue.get()
+            dirty = list(self._maker_dirty_events)
+            self._maker_dirty_events.clear()
+
+            now = time.time()
+            for event_ticker in dirty:
+                try:
+                    if self.executor.is_circuit_breaker_tripped():
+                        break
+                    if failed_until.get(event_ticker, 0) > now:
+                        continue
+
+                    event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
+                    if not event_books:
+                        continue
+                    meta = {t: self._market_metadata.get(t, {}) for t in event_books}
+
+                    if self.maker.is_event_active(event_ticker):
+                        await self.maker.on_orderbook_update(event_ticker, event_books)
+                        continue
+
+                    maker_signal = self.engine.evaluate_maker(
+                        event_ticker, event_books, market_metadata=meta)
+                    if not maker_signal:
+                        continue
+
+                    tickers = [t for t, _ in maker_signal.legs]
+                    if not await self._validate_recent_trades(tickers):
+                        continue
+
+                    posted = await self.maker.post(maker_signal)
+                    if posted:
+                        logger.info(json.dumps({
+                            "event": "maker_posted",
+                            "event_ticker": maker_signal.event_ticker,
+                            "legs": maker_signal.legs,
+                            "net_profit": round(maker_signal.net_profit, 6),
+                            "profit_pct": round(maker_signal.profit_pct, 2),
+                        }))
+                except Exception:
+                    logger.exception("Maker worker error for %s", event_ticker)
+                    failed_until[event_ticker] = time.time() + 60
 
     async def _execute_and_track(self, signal):
         try:
@@ -345,9 +373,14 @@ class ArbBot:
         discovery_task = asyncio.create_task(self._discover_events())
         listen_task = asyncio.create_task(self.scanner.listen())
         status_task = asyncio.create_task(self._report_status())
+        maker_task = asyncio.create_task(self._maker_worker()) if self.maker else None
+
+        tasks = [discovery_task, listen_task, status_task]
+        if maker_task:
+            tasks.append(maker_task)
 
         try:
-            await asyncio.gather(discovery_task, listen_task, status_task)
+            await asyncio.gather(*tasks)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
