@@ -106,3 +106,15 @@ def test_load_config_strategy_overrides():
     assert cfg.strategy_overrides["min_volume_24h"] == 200
     assert cfg.strategy_overrides["min_bid_depth"] == 10
     assert cfg.strategy_overrides["min_profit_pct"] == 5.0
+
+
+def test_load_config_maker_defaults():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(SAMPLE_CONFIG, f)
+        f.flush()
+        cfg = load_config(f.name)
+    os.unlink(f.name)
+
+    assert cfg.maker_enabled is True
+    assert cfg.maker_fill_mode == "cancel_and_take"
+    assert cfg.max_maker_events == 3

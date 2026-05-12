@@ -27,6 +27,9 @@ class Config:
     event_poll_interval_secs: int
     max_session_loss: float
     circuit_breaker_on_any_loss: bool
+    maker_enabled: bool
+    maker_fill_mode: str
+    max_maker_events: int
     log_level: str
     log_file: str
 
@@ -76,6 +79,9 @@ def load_config(path: str) -> Config:
         event_poll_interval_secs=strategy.get("event_poll_interval_secs", 60),
         max_session_loss=float(strategy.get("max_session_loss", 1.0)),
         circuit_breaker_on_any_loss=strategy.get("circuit_breaker_on_any_loss", True),
+        maker_enabled=strategy.get("maker_enabled", True),
+        maker_fill_mode=strategy.get("maker_fill_mode", "cancel_and_take"),
+        max_maker_events=int(strategy.get("max_maker_events", 3)),
         log_level=logging_cfg.get("level", "INFO"),
         log_file=logging_cfg.get("file", "logs/arb_bot.log"),
     )

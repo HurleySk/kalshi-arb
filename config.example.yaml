@@ -14,6 +14,9 @@ strategy:
   event_poll_interval_secs: 60
   max_session_loss: 1.0              # Stop trading if cumulative loss exceeds this ($)
   circuit_breaker_on_any_loss: true   # Stop on ANY loss (default: true) — any loss means a bug
+  maker_enabled: true                 # Post maker orders on near-arb events (0% fees)
+  maker_fill_mode: cancel_and_take    # cancel_and_take | tighten_on_fill
+  max_maker_events: 3                 # Max events with resting maker orders
   # Optional overrides (uncomment to customize):
   # min_volume_24h: 50
   # min_bid_depth: 5
