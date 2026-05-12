@@ -18,6 +18,11 @@ class Orderbook:
             return None
         return max(level.price for level in self.yes_bids)
 
+    def best_no_bid(self) -> float | None:
+        if not self.no_bids:
+            return None
+        return max(level.price for level in self.no_bids)
+
 
 @dataclass
 class Market:
