@@ -1,0 +1,19 @@
+mode: demo
+
+credentials:
+  demo:
+    api_key_id: "your-demo-key-id"
+    private_key_path: "~/.kalshi/demo_private_key.pem"
+  live:
+    api_key_id: "your-live-key-id"
+    private_key_path: "~/.kalshi/live_private_key.pem"
+
+strategy:
+  min_profit_pct: 2.0
+  max_exposure_ratio: 3.0
+  fill_timeout_secs: 30
+  event_poll_interval_secs: 60
+
+logging:
+  level: INFO
+  file: logs/arb_bot.log
