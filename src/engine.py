@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from src.fees import arb_profit, exposure_ratio
 from src.models import Orderbook, TradeSignal
+from src.risk import RiskProfile
 
 logger = logging.getLogger(__name__)
 
@@ -10,17 +11,27 @@ logger = logging.getLogger(__name__)
 class ArbEngine:
     def __init__(
         self,
-        min_profit_pct: float,
-        max_exposure_ratio: float,
+        risk_profile: RiskProfile | None = None,
+        min_profit_pct: float = 1.0,
+        max_exposure_ratio: float = 3.0,
         near_term_hours: float = 24,
         hurdle_rate_annual_pct: float = 10.0,
         min_bid_depth: int = 1,
     ):
-        self.min_profit_pct = min_profit_pct
-        self.max_exposure_ratio = max_exposure_ratio
-        self.near_term_hours = near_term_hours
-        self.hurdle_rate_annual_pct = hurdle_rate_annual_pct
-        self.min_bid_depth = min_bid_depth
+        if risk_profile:
+            self.min_profit_pct = risk_profile.min_profit_pct
+            self.max_exposure_ratio = risk_profile.max_exposure_ratio
+            self.near_term_hours = risk_profile.near_term_hours
+            self.hurdle_rate_annual_pct = risk_profile.hurdle_rate_annual_pct
+            self.min_bid_depth = risk_profile.min_bid_depth
+            self.min_volume_24h = risk_profile.min_volume_24h
+        else:
+            self.min_profit_pct = min_profit_pct
+            self.max_exposure_ratio = max_exposure_ratio
+            self.near_term_hours = near_term_hours
+            self.hurdle_rate_annual_pct = hurdle_rate_annual_pct
+            self.min_bid_depth = min_bid_depth
+            self.min_volume_24h = 0
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -53,6 +64,13 @@ class ArbEngine:
                 if total_depth < self.min_bid_depth:
                     return None
             legs.append((ticker, best_bid))
+
+        if self.min_volume_24h > 0 and market_metadata:
+            for ticker, _ in legs:
+                meta = market_metadata.get(ticker, {})
+                volume = meta.get("volume_24h", 0)
+                if volume < self.min_volume_24h:
+                    return None
 
         bid_prices = [price for _, price in legs]
         profit = arb_profit(bid_prices)

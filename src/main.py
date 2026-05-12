@@ -26,13 +26,11 @@ class ArbBot:
         )
         self.api = KalshiAPI(base_url=self.cfg.rest_base_url, auth=self.auth)
         self.orderbook_mgr = OrderbookManager()
-        self.engine = ArbEngine(
-            min_profit_pct=self.cfg.min_profit_pct,
-            max_exposure_ratio=self.cfg.max_exposure_ratio,
-            near_term_hours=self.cfg.near_term_hours,
-            hurdle_rate_annual_pct=self.cfg.hurdle_rate_annual_pct,
-            min_bid_depth=self.cfg.min_bid_depth,
-        )
+
+        from src.risk import load_risk_profile
+        self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
+
+        self.engine = ArbEngine(risk_profile=self.risk_profile)
         self.positions = PositionTracker()
         self.executor = ExecutionManager(
             api=self.api,
@@ -156,6 +154,7 @@ class ArbBot:
                 self._market_metadata[m.ticker] = {
                     "close_time": m.close_time,
                     "expected_expiration_time": m.expected_expiration_time,
+                    "volume_24h": m.volume_24h,
                 }
         return new_tickers
 
@@ -219,7 +218,8 @@ class ArbBot:
     async def run(self):
         self._setup_logging()
         self._stats["started_at"] = time.time()
-        logger.info("Starting Kalshi Arb Bot in %s mode", self.cfg.mode.upper())
+        logger.info("Starting Kalshi Arb Bot in %s mode (risk: %s)",
+                     self.cfg.mode.upper(), self.cfg.risk_mode)
 
         await self.scanner.connect()
         await self.scanner.subscribe_fills()

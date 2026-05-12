@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, timedelta
 from src.engine import ArbEngine
 from src.models import Orderbook, OrderbookLevel
+from src.risk import load_risk_profile
 
 
 def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0, **kwargs):
@@ -145,4 +146,47 @@ def test_min_bid_depth_default_accepts():
         "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=1)], no_bids=[]),
     }
     signal = engine.evaluate("E1", orderbooks)
+    assert signal is not None
+
+
+# --- RiskProfile-based tests ---
+
+def _make_engine_from_profile(mode="aggressive", **overrides):
+    profile = load_risk_profile(mode, overrides)
+    return ArbEngine(risk_profile=profile)
+
+
+def test_volume_check_rejects_zero_volume_leg():
+    engine = _make_engine_from_profile(mode="conservative")
+    orderbooks = {
+        "MED": Orderbook(yes_bids=[OrderbookLevel(price=0.46, quantity=10)], no_bids=[]),
+        "LAN": Orderbook(yes_bids=[OrderbookLevel(price=0.99, quantity=10)], no_bids=[]),
+    }
+    meta = {"MED": {"volume_24h": 0}, "LAN": {"volume_24h": 500}}
+    signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
+    assert signal is None
+
+
+def test_volume_check_accepts_high_volume():
+    engine = _make_engine_from_profile(mode="conservative")
+    # Balanced prices give low exposure ratio (passes conservative max=2.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=100)], no_bids=[]),
+        "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=100)], no_bids=[]),
+    }
+    meta = {"M1": {"volume_24h": 200}, "M2": {"volume_24h": 150}, "M3": {"volume_24h": 100}}
+    signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
+    assert signal is not None
+
+
+def test_aggressive_mode_allows_zero_volume():
+    engine = _make_engine_from_profile(mode="aggressive")
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=10)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=10)], no_bids=[]),
+        "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=10)], no_bids=[]),
+    }
+    meta = {"M1": {"volume_24h": 0}, "M2": {"volume_24h": 0}, "M3": {"volume_24h": 0}}
+    signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
     assert signal is not None
