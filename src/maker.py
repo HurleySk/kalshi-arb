@@ -82,6 +82,53 @@ class MakerManager:
         for event_ticker in list(self._active.keys()):
             await self.cancel_event(event_ticker)
 
+    async def handle_fill(self, order_id: str, ticker: str, price: float, quantity: int):
+        event_ticker = self._order_to_event.get(order_id)
+        if not event_ticker:
+            return
+        event = self._active.get(event_ticker)
+        if not event:
+            return
+
+        event.filled[order_id] = price
+        logger.info("Maker fill: %s @ %.2f on %s (%d/%d legs)",
+                     ticker, price, event_ticker, len(event.filled), len(event.order_ids))
+
+        if len(event.filled) == len(event.order_ids):
+            profit = sum(event.order_prices.values()) - 1.0
+            logger.info("ALL MAKER LEGS FILLED on %s — profit $%.4f (0%% fees!)",
+                         event_ticker, profit)
+            self._cleanup_event(event_ticker)
+            return
+
+        if self.fill_mode == "cancel_and_take":
+            await self._complete_cancel_and_take(event_ticker, event)
+
+    async def _complete_cancel_and_take(self, event_ticker: str, event: MakerEvent):
+        unfilled_tickers = [
+            (ticker, event.order_prices[ticker])
+            for ticker, oid in event.order_ids.items()
+            if oid not in event.filled
+        ]
+        unfilled_oids = [
+            oid for oid in event.order_ids.values()
+            if oid not in event.filled
+        ]
+
+        for oid in unfilled_oids:
+            await self.api.cancel_order(oid)
+
+        if unfilled_tickers:
+            taker_orders = [
+                self.api.build_sell_order(ticker=t, yes_price=p, quantity=1)
+                for t, p in unfilled_tickers
+            ]
+            await self.api.batch_create_orders(taker_orders)
+            logger.info("Placed taker orders for %d remaining legs on %s",
+                         len(taker_orders), event_ticker)
+
+        self._cleanup_event(event_ticker)
+
     def _cleanup_event(self, event_ticker: str):
         event = self._active.pop(event_ticker, None)
         if event:

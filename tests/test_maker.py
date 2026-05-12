@@ -89,3 +89,29 @@ def test_owns_order():
     assert maker.owns_order("mo1")
     assert maker.owns_order("mo2")
     assert not maker.owns_order("unknown")
+
+
+def test_handle_fill_cancel_and_take():
+    maker, api = _make_maker(fill_mode="cancel_and_take")
+    signal = _maker_signal()
+    asyncio.get_event_loop().run_until_complete(maker.post(signal))
+
+    asyncio.get_event_loop().run_until_complete(
+        maker.handle_fill("mo1", "M1", 0.52, 1)
+    )
+
+    api.cancel_order.assert_called_with("mo2")
+    assert api.batch_create_orders.call_count == 2
+    taker_call = api.batch_create_orders.call_args_list[1]
+    taker_orders = taker_call[0][0]
+    assert taker_orders[0]["ticker"] == "M2"
+    assert taker_orders[0]["action"] == "sell"
+    assert maker.active_event_count() == 0
+
+
+def test_handle_fill_unknown_order_ignored():
+    maker, api = _make_maker()
+    asyncio.get_event_loop().run_until_complete(
+        maker.handle_fill("unknown", "M1", 0.52, 1)
+    )
+    assert api.cancel_order.call_count == 0
