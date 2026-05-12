@@ -149,14 +149,11 @@ class ArbBot:
         logger.info("Starting full event scan...")
         cursor = ""
         pages = 0
-        total_new = 0
+        all_events = []
         while True:
             try:
                 events, next_cursor = await self.api.fetch_events_page(cursor)
-                new_tickers = self._register_events(events)
-                total_new += len(new_tickers)
-                if new_tickers:
-                    await self.scanner.subscribe(new_tickers)
+                all_events.extend(events)
                 pages += 1
                 if not next_cursor:
                     break
@@ -165,8 +162,21 @@ class ArbBot:
             except Exception:
                 logger.exception("Error during full scan at page %d", pages)
                 await asyncio.sleep(5)
+
+        def _earliest_close(event):
+            times = [m.close_time for m in event.markets if m.close_time]
+            return min(times) if times else "9999"
+
+        all_events.sort(key=_earliest_close)
+        total_new = 0
+        for event in all_events:
+            new_tickers = self._register_events([event])
+            total_new += len(new_tickers)
+            if new_tickers:
+                await self.scanner.subscribe(new_tickers)
+
         logger.info(
-            "Full scan complete: %d pages, %d events, %d new markets",
+            "Full scan complete: %d pages, %d events, %d new markets (sorted by close_time)",
             pages, len(self._event_tickers), total_new,
         )
 
