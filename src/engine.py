@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from src.fees import arb_profit, exposure_ratio
+from src.fees import arb_profit, exposure_ratio, maker_arb_profit
 from src.models import Orderbook, TradeSignal
 from src.risk import RiskProfile
 
@@ -54,23 +54,9 @@ class ArbEngine:
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
     ) -> TradeSignal | None:
-        legs: list[tuple[str, float]] = []
-        for ticker, book in orderbooks.items():
-            best_bid = book.best_yes_bid()
-            if best_bid is None:
-                return None
-            if self.min_bid_depth > 1:
-                total_depth = sum(level.quantity for level in book.yes_bids if level.price >= best_bid - 1e-9)
-                if total_depth < self.min_bid_depth:
-                    return None
-            legs.append((ticker, best_bid))
-
-        if self.min_volume_24h > 0 and market_metadata:
-            for ticker, _ in legs:
-                meta = market_metadata.get(ticker, {})
-                volume = meta.get("volume_24h", 0)
-                if volume < self.min_volume_24h:
-                    return None
+        legs = self._validate_legs(orderbooks, market_metadata)
+        if legs is None:
+            return None
 
         bid_prices = [price for _, price in legs]
         profit = arb_profit(bid_prices)
@@ -99,4 +85,63 @@ class ArbEngine:
             net_profit=profit,
             profit_pct=profit_pct,
             exposure_ratio=exp_ratio,
+        )
+
+    def _validate_legs(
+        self,
+        orderbooks: dict[str, Orderbook],
+        market_metadata: dict[str, dict] | None = None,
+    ) -> list[tuple[str, float]] | None:
+        legs: list[tuple[str, float]] = []
+        for ticker, book in orderbooks.items():
+            best_bid = book.best_yes_bid()
+            if best_bid is None:
+                return None
+            if self.min_bid_depth > 1:
+                total_depth = sum(level.quantity for level in book.yes_bids if level.price >= best_bid - 1e-9)
+                if total_depth < self.min_bid_depth:
+                    return None
+            legs.append((ticker, best_bid))
+
+        if self.min_volume_24h > 0 and market_metadata:
+            for ticker, _ in legs:
+                meta = market_metadata.get(ticker, {})
+                volume = meta.get("volume_24h", 0)
+                if volume < self.min_volume_24h:
+                    return None
+
+        return legs
+
+    def evaluate_maker(
+        self,
+        event_ticker: str,
+        orderbooks: dict[str, Orderbook],
+        market_metadata: dict[str, dict] | None = None,
+    ) -> TradeSignal | None:
+        legs = self._validate_legs(orderbooks, market_metadata)
+        if legs is None:
+            return None
+
+        bid_prices = [price for _, price in legs]
+        profit = maker_arb_profit(bid_prices)
+        if profit <= 0:
+            return None
+
+        profit_pct = (profit / 1.0) * 100
+        premiums = sum(bid_prices)
+        net_premium = premiums - 1.0
+        if net_premium <= 0:
+            return None
+        worst_loss = max(0.0, 1.0 - (premiums - max(bid_prices)))
+        exp_ratio = worst_loss / net_premium
+        if exp_ratio > self.max_exposure_ratio:
+            return None
+
+        return TradeSignal(
+            event_ticker=event_ticker,
+            legs=legs,
+            net_profit=profit,
+            profit_pct=profit_pct,
+            exposure_ratio=exp_ratio,
+            signal_type="maker",
         )

@@ -190,3 +190,51 @@ def test_aggressive_mode_allows_zero_volume():
     meta = {"M1": {"volume_24h": 0}, "M2": {"volume_24h": 0}, "M3": {"volume_24h": 0}}
     signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
     assert signal is not None
+
+
+# --- Maker evaluation tests ---
+
+def test_evaluate_maker_signal_in_fee_gap():
+    """3 legs at $0.35 (sum=$1.05): taker profit 0.2% < 1% threshold, maker profit 5%."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+        "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+    }
+    assert engine.evaluate("E1", orderbooks) is None
+
+    maker_signal = engine.evaluate_maker("E1", orderbooks)
+    assert maker_signal is not None
+    assert maker_signal.signal_type == "maker"
+    assert maker_signal.net_profit > 0
+
+
+def test_evaluate_maker_returns_none_below_dollar():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.50, quantity=100)], no_bids=[]),
+    }
+    assert engine.evaluate_maker("E1", orderbooks) is None
+
+
+def test_evaluate_maker_respects_volume_check():
+    engine = _make_engine_from_profile(mode="conservative")
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+        "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+    }
+    meta = {"M1": {"volume_24h": 0}, "M2": {"volume_24h": 500}, "M3": {"volume_24h": 500}}
+    assert engine.evaluate_maker("E1", orderbooks, market_metadata=meta) is None
+
+
+def test_evaluate_maker_respects_depth_check():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_bid_depth=50)
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=5)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+        "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+    }
+    assert engine.evaluate_maker("E1", orderbooks) is None
