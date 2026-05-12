@@ -35,14 +35,18 @@ Three async components run concurrently in `ArbBot.run()` (`src/main.py`):
 
 3. **Arb Detection → Execution** (`_on_orderbook_update` → `engine.evaluate` → `executor.execute`) — The hot path. On each orderbook update, evaluates whether selling yes on all outcomes is profitable after taker fees (7%). If profitable and passes filters, fires a batch order via REST API.
 
+4. **Maker Layer** (`engine.evaluate_maker` → `maker.MakerManager`) — When bid sum is between $1.00 and the taker threshold (~$1.07), posts limit orders at best bid prices as maker (0% fees). On fill, completes the arb via cancel_and_take (cancel remaining, taker-complete) or tighten_on_fill (progressively tighten prices). Reprices on orderbook updates, cancels if arb disappears.
+
 ### Data flow
 
 ```
 REST /events → parse_events → register with OrderbookManager → WS subscribe
 WS orderbook_delta → OrderbookManager.apply_snapshot/apply_delta
-  → _on_orderbook_update → ArbEngine.evaluate (with market metadata for close_time)
-    → ExecutionManager.execute → batch POST /portfolio/orders/batched
-      → monitor fills → cancel unfilled legs after timeout
+  → _on_orderbook_update
+    → ArbEngine.evaluate (taker: bid sum > $1.07) → ExecutionManager.execute
+    → ArbEngine.evaluate_maker (maker: bid sum $1.00-$1.07) → MakerManager.post
+    → MakerManager.on_orderbook_update (reprice active maker orders)
+WS fill → _on_fill dispatcher → executor.handle_fill OR maker.handle_fill
 ```
 
 ### Risk Modes (`src/risk.py`)
