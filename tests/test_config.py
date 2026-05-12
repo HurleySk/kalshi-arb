@@ -42,6 +42,9 @@ def test_load_config_demo_mode():
     assert cfg.ws_url == DEMO_WS_URL
     assert cfg.min_profit_pct == 2.0
     assert cfg.max_exposure_ratio == 3.0
+    assert cfg.near_term_hours == 24
+    assert cfg.hurdle_rate_annual_pct == 10.0
+    assert cfg.min_bid_depth == 1
     assert cfg.fill_timeout_secs == 30
 
 

@@ -9,8 +9,11 @@ credentials:
     private_key_path: "~/.kalshi/live_private_key.pem"
 
 strategy:
-  min_profit_pct: 2.0
+  min_profit_pct: 1.0
   max_exposure_ratio: 3.0
+  near_term_hours: 24
+  hurdle_rate_annual_pct: 10.0
+  min_bid_depth: 1
   fill_timeout_secs: 30
   event_poll_interval_secs: 60
 
