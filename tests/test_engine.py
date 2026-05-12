@@ -1,5 +1,5 @@
 from src.engine import ArbEngine
-from src.models import Orderbook, OrderbookLevel, TradeSignal
+from src.models import Orderbook, OrderbookLevel
 
 
 def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0):

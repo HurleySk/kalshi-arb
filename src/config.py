@@ -33,11 +33,22 @@ def load_config(path: str) -> Config:
     with open(path) as f:
         raw = yaml.safe_load(f)
 
+    for key in ("mode", "credentials", "strategy"):
+        if key not in raw:
+            raise ValueError(f"Missing required config key: {key!r}")
+
     mode = raw["mode"]
     if mode not in URLS:
         raise ValueError(f"Invalid mode: {mode!r}. Must be 'demo' or 'live'.")
 
+    if mode not in raw["credentials"]:
+        raise ValueError(f"No credentials for mode {mode!r}")
+
     creds = raw["credentials"][mode]
+    for key in ("api_key_id", "private_key_path"):
+        if key not in creds:
+            raise ValueError(f"Missing credential: {key!r} for mode {mode!r}")
+
     rest_url, ws_url = URLS[mode]
     strategy = raw["strategy"]
     logging_cfg = raw.get("logging", {})

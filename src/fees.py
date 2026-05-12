@@ -17,6 +17,6 @@ def exposure_ratio(bid_prices: list[float]) -> float:
     net_premium = premiums - 1.0 - fees
     if net_premium <= 0:
         return float("inf")
-    # Approximation: worst_loss ignores fees on filled legs (sub-1% error)
-    worst_loss = max(0.0, 1.0 - (premiums - max(bid_prices)))
+    filled_fees = fees - maker_fee(max(bid_prices))
+    worst_loss = max(0.0, 1.0 - (premiums - max(bid_prices)) + filled_fees)
     return worst_loss / net_premium
