@@ -5,8 +5,8 @@ import yaml
 
 DEMO_REST_URL = "https://external-api.demo.kalshi.co/trade-api/v2"
 DEMO_WS_URL = "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
-LIVE_REST_URL = "https://trading-api.kalshi.com/trade-api/v2"
-LIVE_WS_URL = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
+LIVE_REST_URL = "https://api.elections.kalshi.com/trade-api/v2"
+LIVE_WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2"
 
 URLS = {
     "demo": (DEMO_REST_URL, DEMO_WS_URL),
