@@ -155,3 +155,6 @@ class KalshiAPI:
 
     async def get_balance(self) -> dict:
         return await self._get("/portfolio/balance")
+
+    async def get_market_trades(self, ticker: str, limit: int = 10) -> dict:
+        return await self._get("/markets/trades", params={"ticker": ticker, "limit": str(limit)})
