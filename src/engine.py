@@ -32,6 +32,7 @@ class ArbEngine:
             self.hurdle_rate_annual_pct = hurdle_rate_annual_pct
             self.min_bid_depth = min_bid_depth
             self.min_volume_24h = 0
+        self.maker_max_exposure_ratio = 50.0
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -129,7 +130,7 @@ class ArbEngine:
 
         profit_pct = (profit / 1.0) * 100
         exp_ratio = maker_exposure_ratio(bid_prices)
-        if exp_ratio > self.max_exposure_ratio:
+        if exp_ratio > self.maker_max_exposure_ratio:
             return None
 
         return TradeSignal(

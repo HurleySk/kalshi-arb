@@ -240,11 +240,23 @@ def test_evaluate_maker_respects_depth_check():
     assert engine.evaluate_maker("E1", orderbooks) is None
 
 
-def test_evaluate_maker_rejects_high_exposure():
-    """2-leg at $0.51/$0.50 (sum=$1.01) has exposure ratio ~49, way above max."""
+def test_evaluate_maker_rejects_extreme_exposure():
+    """2-leg at $0.501/$0.500 (sum=$1.001) has exposure ratio ~499, above maker max of 50."""
     engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
     orderbooks = {
-        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.51, quantity=100)], no_bids=[]),
-        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.50, quantity=100)], no_bids=[]),
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.501, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.500, quantity=100)], no_bids=[]),
     }
     assert engine.evaluate_maker("E1", orderbooks) is None
+
+
+def test_evaluate_maker_accepts_moderate_exposure():
+    """2-leg at $0.52/$0.51 (sum=$1.03) has maker exposure ratio ~16, below 50."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.52, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.51, quantity=100)], no_bids=[]),
+    }
+    signal = engine.evaluate_maker("E1", orderbooks)
+    assert signal is not None
+    assert signal.signal_type == "maker"

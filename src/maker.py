@@ -20,9 +20,14 @@ class MakerEvent:
 class MakerManager:
     REPRICE_THROTTLE_SECS = 1.0
 
+    VALID_FILL_MODES = {"cancel_and_take", "tighten_on_fill"}
+
     def __init__(self, api: KalshiAPI, fill_mode: str = "cancel_and_take",
                  max_events: int = 3):
         self.api = api
+        if fill_mode not in self.VALID_FILL_MODES:
+            logger.warning("Unknown fill_mode %r, falling back to cancel_and_take", fill_mode)
+            fill_mode = "cancel_and_take"
         self.fill_mode = fill_mode
         self.max_events = max_events
         self._active: dict[str, MakerEvent] = {}
@@ -101,8 +106,8 @@ class MakerManager:
             self._cleanup_event(event_ticker)
             return
 
-        if self.fill_mode == "cancel_and_take":
-            await self._complete_cancel_and_take(event_ticker, event)
+        # tighten_on_fill not yet implemented — falls back to cancel_and_take
+        await self._complete_cancel_and_take(event_ticker, event)
 
     async def _complete_cancel_and_take(self, event_ticker: str, event: MakerEvent):
         unfilled_tickers = [
