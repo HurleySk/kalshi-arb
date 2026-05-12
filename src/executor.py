@@ -49,10 +49,11 @@ class ExecutionManager:
             )
 
             response = await self.api.batch_create_orders(orders)
+            logger.info("Batch order response: %s", response)
             order_list = response.get("orders", [])
             execution = ArbExecution(
                 signal=signal,
-                order_ids=[o["order_id"] for o in order_list],
+                order_ids=[o.get("order_id", o.get("id", "")) for o in order_list],
                 started_at=time.time(),
             )
             self._active = execution

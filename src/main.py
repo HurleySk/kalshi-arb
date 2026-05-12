@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from src.auth import KalshiAuth
@@ -42,6 +43,8 @@ class ArbBot:
             on_orderbook_update=self._on_orderbook_update,
         )
         self._event_tickers: set[str] = set()
+        self._last_signal_time: dict[str, float] = {}
+        self._signal_cooldown = 60.0
 
     def _setup_logging(self):
         log_dir = Path(self.cfg.log_file).parent
@@ -68,6 +71,10 @@ class ArbBot:
         signal = self.engine.evaluate(event_ticker, event_books)
 
         if signal and not self.executor.is_executing():
+            last = self._last_signal_time.get(event_ticker, 0)
+            if time.time() - last < self._signal_cooldown:
+                return
+            self._last_signal_time[event_ticker] = time.time()
             logger.info(
                 json.dumps({
                     "event": "arb_detected",
