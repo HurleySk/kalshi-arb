@@ -57,8 +57,10 @@ class MakerManager:
         if event_ticker in self._active or event_ticker in self._posting:
             return True
         completed_at = self._completed.get(event_ticker)
-        if completed_at and time.time() - completed_at < COMPLETED_COOLDOWN_SECS:
-            return True
+        if completed_at:
+            if time.time() - completed_at < COMPLETED_COOLDOWN_SECS:
+                return True
+            del self._completed[event_ticker]
         return False
 
     async def post(self, signal: TradeSignal) -> bool:
@@ -123,6 +125,7 @@ class MakerManager:
                 await self.api.batch_cancel_orders(unfilled_oids)
             except Exception:
                 logger.exception("Failed to cancel orders on %s", event_ticker)
+        self._completed[event_ticker] = time.time()
         logger.info("Cancelled maker orders on %s", event_ticker)
 
     async def cancel_all(self):
