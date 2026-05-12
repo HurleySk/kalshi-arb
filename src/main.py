@@ -29,6 +29,9 @@ class ArbBot:
         self.engine = ArbEngine(
             min_profit_pct=self.cfg.min_profit_pct,
             max_exposure_ratio=self.cfg.max_exposure_ratio,
+            near_term_hours=self.cfg.near_term_hours,
+            hurdle_rate_annual_pct=self.cfg.hurdle_rate_annual_pct,
+            min_bid_depth=self.cfg.min_bid_depth,
         )
         self.positions = PositionTracker()
         self.executor = ExecutionManager(
@@ -76,7 +79,8 @@ class ArbBot:
             return
 
         event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
-        signal = self.engine.evaluate(event_ticker, event_books)
+        meta = {t: self._market_metadata.get(t, {}) for t in event_books}
+        signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
 
         if signal and not self.executor.is_executing():
             last = self._last_signal_time.get(event_ticker, 0)

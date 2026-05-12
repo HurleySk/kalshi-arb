@@ -23,6 +23,9 @@ class Config:
     ws_url: str
     min_profit_pct: float
     max_exposure_ratio: float
+    near_term_hours: float
+    hurdle_rate_annual_pct: float
+    min_bid_depth: int
     fill_timeout_secs: int
     event_poll_interval_secs: int
     log_level: str
@@ -61,6 +64,9 @@ def load_config(path: str) -> Config:
         ws_url=ws_url,
         min_profit_pct=strategy["min_profit_pct"],
         max_exposure_ratio=strategy["max_exposure_ratio"],
+        near_term_hours=strategy.get("near_term_hours", 24),
+        hurdle_rate_annual_pct=strategy.get("hurdle_rate_annual_pct", 10.0),
+        min_bid_depth=strategy.get("min_bid_depth", 1),
         fill_timeout_secs=strategy["fill_timeout_secs"],
         event_poll_interval_secs=strategy["event_poll_interval_secs"],
         log_level=logging_cfg.get("level", "INFO"),

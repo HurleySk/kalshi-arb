@@ -1,9 +1,15 @@
+from datetime import datetime, timezone, timedelta
 from src.engine import ArbEngine
 from src.models import Orderbook, OrderbookLevel
 
 
-def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0):
-    return ArbEngine(min_profit_pct=min_profit_pct, max_exposure_ratio=max_exposure_ratio)
+def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0, **kwargs):
+    return ArbEngine(min_profit_pct=min_profit_pct, max_exposure_ratio=max_exposure_ratio, **kwargs)
+
+
+def _future_iso(days: float) -> str:
+    dt = datetime.now(timezone.utc) + timedelta(days=days)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def test_evaluate_profitable_arb():
@@ -78,3 +84,43 @@ def test_evaluate_uses_best_bid():
     signal = engine.evaluate("E1", orderbooks)
     assert signal is not None
     assert any(price == 0.40 for _, price in signal.legs)
+
+
+def _wide_orderbooks():
+    return {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=100)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+        "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+    }
+
+
+def test_near_term_arb_accepted():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, near_term_hours=24)
+    close = _future_iso(0.5)
+    meta = {t: {"close_time": close} for t in ["M1", "M2", "M3"]}
+    signal = engine.evaluate("E1", _wide_orderbooks(), market_metadata=meta)
+    assert signal is not None
+
+
+def test_long_dated_high_return_accepted():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, hurdle_rate_annual_pct=10.0)
+    close = _future_iso(30)
+    meta = {t: {"close_time": close} for t in ["M1", "M2", "M3"]}
+    # 5.14% over 30 days → annualized 62.5% → above 10% hurdle
+    signal = engine.evaluate("E1", _wide_orderbooks(), market_metadata=meta)
+    assert signal is not None
+
+
+def test_long_dated_low_return_rejected():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, hurdle_rate_annual_pct=10.0)
+    close = _future_iso(730)
+    meta = {t: {"close_time": close} for t in ["M1", "M2", "M3"]}
+    # 5.14% over 730 days → annualized 2.57% → below 10% hurdle
+    signal = engine.evaluate("E1", _wide_orderbooks(), market_metadata=meta)
+    assert signal is None
+
+
+def test_no_metadata_skips_horizon_check():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    signal = engine.evaluate("E1", _wide_orderbooks())
+    assert signal is not None
