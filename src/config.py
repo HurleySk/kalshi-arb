@@ -21,11 +21,8 @@ class Config:
     private_key_path: Path
     rest_base_url: str
     ws_url: str
-    min_profit_pct: float
-    max_exposure_ratio: float
-    near_term_hours: float
-    hurdle_rate_annual_pct: float
-    min_bid_depth: int
+    risk_mode: str
+    strategy_overrides: dict
     fill_timeout_secs: int
     event_poll_interval_secs: int
     log_level: str
@@ -56,19 +53,25 @@ def load_config(path: str) -> Config:
     strategy = raw["strategy"]
     logging_cfg = raw.get("logging", {})
 
+    risk_mode = strategy.get("risk_mode", "conservative")
+    override_keys = {
+        "min_volume_24h", "min_bid_depth", "min_profit_pct",
+        "require_recent_trades", "max_exposure_ratio",
+        "near_term_hours", "hurdle_rate_annual_pct",
+        "unwind_phase1_secs", "unwind_phase2_secs", "unwind_price_step_cents",
+    }
+    strategy_overrides = {k: v for k, v in strategy.items() if k in override_keys}
+
     return Config(
         mode=mode,
         api_key_id=creds["api_key_id"],
         private_key_path=Path(creds["private_key_path"]).expanduser(),
         rest_base_url=rest_url,
         ws_url=ws_url,
-        min_profit_pct=strategy["min_profit_pct"],
-        max_exposure_ratio=strategy["max_exposure_ratio"],
-        near_term_hours=strategy.get("near_term_hours", 24),
-        hurdle_rate_annual_pct=strategy.get("hurdle_rate_annual_pct", 10.0),
-        min_bid_depth=strategy.get("min_bid_depth", 1),
-        fill_timeout_secs=strategy["fill_timeout_secs"],
-        event_poll_interval_secs=strategy["event_poll_interval_secs"],
+        risk_mode=risk_mode,
+        strategy_overrides=strategy_overrides,
+        fill_timeout_secs=strategy.get("fill_timeout_secs", 30),
+        event_poll_interval_secs=strategy.get("event_poll_interval_secs", 60),
         log_level=logging_cfg.get("level", "INFO"),
         log_file=logging_cfg.get("file", "logs/arb_bot.log"),
     )

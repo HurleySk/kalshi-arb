@@ -1,4 +1,5 @@
 import os
+import copy
 import tempfile
 import yaml
 from src.config import load_config, Config, DEMO_REST_URL, DEMO_WS_URL, LIVE_REST_URL, LIVE_WS_URL
@@ -17,8 +18,6 @@ SAMPLE_CONFIG = {
         },
     },
     "strategy": {
-        "min_profit_pct": 2.0,
-        "max_exposure_ratio": 3.0,
         "fill_timeout_secs": 30,
         "event_poll_interval_secs": 60,
     },
@@ -40,11 +39,7 @@ def test_load_config_demo_mode():
     assert cfg.api_key_id == "test-key"
     assert cfg.rest_base_url == DEMO_REST_URL
     assert cfg.ws_url == DEMO_WS_URL
-    assert cfg.min_profit_pct == 2.0
-    assert cfg.max_exposure_ratio == 3.0
-    assert cfg.near_term_hours == 24
-    assert cfg.hurdle_rate_annual_pct == 10.0
-    assert cfg.min_bid_depth == 1
+    assert cfg.risk_mode == "conservative"
     assert cfg.fill_timeout_secs == 30
 
 
@@ -75,18 +70,39 @@ def test_load_config_invalid_mode():
     os.unlink(f.name)
 
 
-def test_load_config_custom_strategy_params():
-    import copy
+def test_load_config_with_risk_mode():
     custom = copy.deepcopy(SAMPLE_CONFIG)
-    custom["strategy"]["near_term_hours"] = 48
-    custom["strategy"]["hurdle_rate_annual_pct"] = 15.0
-    custom["strategy"]["min_bid_depth"] = 100
+    custom["strategy"]["risk_mode"] = "aggressive"
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         yaml.dump(custom, f)
         f.flush()
         cfg = load_config(f.name)
     os.unlink(f.name)
 
-    assert cfg.near_term_hours == 48
-    assert cfg.hurdle_rate_annual_pct == 15.0
-    assert cfg.min_bid_depth == 100
+    assert cfg.risk_mode == "aggressive"
+
+
+def test_load_config_defaults_risk_mode_to_conservative():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(SAMPLE_CONFIG, f)
+        f.flush()
+        cfg = load_config(f.name)
+    os.unlink(f.name)
+
+    assert cfg.risk_mode == "conservative"
+
+
+def test_load_config_strategy_overrides():
+    custom = copy.deepcopy(SAMPLE_CONFIG)
+    custom["strategy"]["min_volume_24h"] = 200
+    custom["strategy"]["min_bid_depth"] = 10
+    custom["strategy"]["min_profit_pct"] = 5.0
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(custom, f)
+        f.flush()
+        cfg = load_config(f.name)
+    os.unlink(f.name)
+
+    assert cfg.strategy_overrides["min_volume_24h"] == 200
+    assert cfg.strategy_overrides["min_bid_depth"] == 10
+    assert cfg.strategy_overrides["min_profit_pct"] == 5.0

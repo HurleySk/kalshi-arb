@@ -9,13 +9,18 @@ credentials:
     private_key_path: "~/.kalshi/live_private_key.pem"
 
 strategy:
-  min_profit_pct: 1.0
-  max_exposure_ratio: 3.0
-  near_term_hours: 24
-  hurdle_rate_annual_pct: 10.0
-  min_bid_depth: 1
+  risk_mode: conservative    # conservative | moderate | aggressive
   fill_timeout_secs: 30
   event_poll_interval_secs: 60
+  # Optional overrides (uncomment to customize):
+  # min_volume_24h: 50
+  # min_bid_depth: 5
+  # min_profit_pct: 2.0
+  # require_recent_trades: true
+  # max_exposure_ratio: 2.0
+  # unwind_phase1_secs: 15
+  # unwind_phase2_secs: 30
+  # unwind_price_step_cents: 3
 
 logging:
   level: INFO
