@@ -49,7 +49,7 @@ class ArbEngine:
             if best_bid is None:
                 return None
             if self.min_bid_depth > 1:
-                total_depth = sum(l.quantity for l in book.yes_bids if l.price >= best_bid - 1e-9)
+                total_depth = sum(level.quantity for level in book.yes_bids if level.price >= best_bid - 1e-9)
                 if total_depth < self.min_bid_depth:
                     return None
             legs.append((ticker, best_bid))

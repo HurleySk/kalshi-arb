@@ -149,12 +149,15 @@ class ArbBot:
         logger.info("Starting full event scan...")
         cursor = ""
         pages = 0
+        retries = 0
+        max_retries = 3
         all_events = []
         while True:
             try:
                 events, next_cursor = await self.api.fetch_events_page(cursor)
                 all_events.extend(events)
                 pages += 1
+                retries = 0
                 if pages % 10 == 0:
                     logger.info("Scanning page %d... (%d events collected)", pages, len(all_events))
                 if not next_cursor:
@@ -162,7 +165,11 @@ class ArbBot:
                 cursor = next_cursor
                 await asyncio.sleep(0.5)
             except Exception:
-                logger.exception("Error during full scan at page %d", pages)
+                retries += 1
+                if retries >= max_retries:
+                    logger.error("Full scan aborted after %d retries at page %d", max_retries, pages)
+                    break
+                logger.exception("Error during full scan at page %d (retry %d/%d)", pages, retries, max_retries)
                 await asyncio.sleep(5)
 
         def _earliest_close(event):

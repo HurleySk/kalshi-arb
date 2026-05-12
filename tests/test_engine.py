@@ -124,3 +124,25 @@ def test_no_metadata_skips_horizon_check():
     engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
     signal = engine.evaluate("E1", _wide_orderbooks())
     assert signal is not None
+
+
+def test_min_bid_depth_rejects_thin_book():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_bid_depth=50)
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=10)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+        "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=100)], no_bids=[]),
+    }
+    signal = engine.evaluate("E1", orderbooks)
+    assert signal is None
+
+
+def test_min_bid_depth_default_accepts():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids=[OrderbookLevel(price=0.40, quantity=1)], no_bids=[]),
+        "M2": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=1)], no_bids=[]),
+        "M3": Orderbook(yes_bids=[OrderbookLevel(price=0.35, quantity=1)], no_bids=[]),
+    }
+    signal = engine.evaluate("E1", orderbooks)
+    assert signal is not None
