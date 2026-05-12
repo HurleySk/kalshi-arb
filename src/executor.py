@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from src.api import KalshiAPI
 from src.models import TradeSignal
 from src.positions import PositionTracker
+from src.risk import RiskProfile
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +17,21 @@ class ArbExecution:
     order_ids: list[str] = field(default_factory=list)
     filled: dict[str, float] = field(default_factory=dict)
     started_at: float = 0.0
+    batch_response: list[dict] = field(default_factory=list)
 
 
 class ExecutionManager:
-    def __init__(self, api: KalshiAPI, positions: PositionTracker, fill_timeout_secs: int):
+    def __init__(self, api: KalshiAPI, positions: PositionTracker,
+                 fill_timeout_secs: int, risk_profile: RiskProfile | None = None):
         self.api = api
         self.positions = positions
         self.fill_timeout_secs = fill_timeout_secs
         self._executing = False
         self._active: ArbExecution | None = None
         self._failed_events: set[str] = set()
+        self._unwind_phase1_secs = risk_profile.unwind_phase1_secs if risk_profile else 15
+        self._unwind_phase2_secs = risk_profile.unwind_phase2_secs if risk_profile else 30
+        self._unwind_price_step_cents = risk_profile.unwind_price_step_cents if risk_profile else 3
 
     def is_event_blacklisted(self, event_ticker: str) -> bool:
         return event_ticker in self._failed_events
@@ -59,6 +65,7 @@ class ExecutionManager:
                 signal=signal,
                 order_ids=[o.get("order", o).get("order_id", "") for o in order_list],
                 started_at=time.time(),
+                batch_response=order_list,
             )
             self._active = execution
 
@@ -109,6 +116,71 @@ class ExecutionManager:
                     execution.signal.event_ticker, filled_count, len(unfilled),
                 )
                 self._failed_events.add(execution.signal.event_ticker)
+                await self._unwind_partial_fill(execution)
+
+    async def _unwind_partial_fill(self, execution: ArbExecution):
+        filled_tickers = []
+        for o in execution.batch_response:
+            inner = o.get("order", o)
+            if inner.get("order_id") in execution.filled:
+                filled_tickers.append((
+                    inner.get("ticker", ""),
+                    float(inner.get("yes_price_dollars", 0)),
+                    int(float(inner.get("fill_count_fp", 0))),
+                ))
+
+        for ticker, fill_price, qty in filled_tickers:
+            if qty <= 0:
+                continue
+            logger.warning("Unwinding %d contracts of %s (filled @ %.2f)", qty, ticker, fill_price)
+
+            step = self._unwind_price_step_cents / 100.0
+
+            # Phase 1: tight limit
+            phase1_price = min(fill_price + step, 0.99)
+            phase1_order = [{
+                "ticker": ticker, "action": "buy", "side": "yes",
+                "type": "limit", "yes_price": round(phase1_price * 100), "count": qty,
+            }]
+            resp = await self.api.batch_create_orders(phase1_order)
+            order_inner = resp.get("orders", [{}])[0].get("order", resp.get("orders", [{}])[0])
+            if order_inner.get("status") == "executed":
+                logger.info("Unwind phase 1 filled for %s @ %.2f", ticker, phase1_price)
+                continue
+            phase1_oid = order_inner.get("order_id", "")
+
+            if self._unwind_phase1_secs > 0:
+                await asyncio.sleep(self._unwind_phase1_secs)
+
+            # Phase 2: wider limit
+            if phase1_oid:
+                await self.api.cancel_order(phase1_oid)
+            phase2_price = min(fill_price + 2 * step, 0.99)
+            phase2_order = [{
+                "ticker": ticker, "action": "buy", "side": "yes",
+                "type": "limit", "yes_price": round(phase2_price * 100), "count": qty,
+            }]
+            resp = await self.api.batch_create_orders(phase2_order)
+            order_inner = resp.get("orders", [{}])[0].get("order", resp.get("orders", [{}])[0])
+            if order_inner.get("status") == "executed":
+                logger.info("Unwind phase 2 filled for %s @ %.2f", ticker, phase2_price)
+                continue
+            phase2_oid = order_inner.get("order_id", "")
+
+            wait = self._unwind_phase2_secs - self._unwind_phase1_secs
+            if wait > 0:
+                await asyncio.sleep(wait)
+
+            # Phase 3: market order
+            if phase2_oid:
+                await self.api.cancel_order(phase2_oid)
+            phase3_order = [{
+                "ticker": ticker, "action": "buy", "side": "yes",
+                "type": "limit", "yes_price": 99, "count": qty,
+            }]
+            resp = await self.api.batch_create_orders(phase3_order)
+            order_inner = resp.get("orders", [{}])[0].get("order", resp.get("orders", [{}])[0])
+            logger.warning("Unwind phase 3 for %s: %s @ $0.99", ticker, order_inner.get("status"))
 
     def handle_fill(self, fill_data: dict):
         order_id = fill_data.get("order_id", "")
