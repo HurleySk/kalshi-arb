@@ -46,3 +46,20 @@ def test_trade_signal_has_required_fields():
     )
     assert signal.event_ticker == "E1"
     assert len(signal.legs) == 2
+
+
+def test_trade_signal_default_signal_type():
+    signal = TradeSignal(
+        event_ticker="E1", legs=[("M1", 0.5)],
+        net_profit=0.05, profit_pct=5.0, exposure_ratio=1.0,
+    )
+    assert signal.signal_type == "taker"
+
+
+def test_trade_signal_maker_type():
+    signal = TradeSignal(
+        event_ticker="E1", legs=[("M1", 0.5)],
+        net_profit=0.05, profit_pct=5.0, exposure_ratio=1.0,
+        signal_type="maker",
+    )
+    assert signal.signal_type == "maker"

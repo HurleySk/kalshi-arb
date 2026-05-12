@@ -1,5 +1,5 @@
 import math
-from src.fees import taker_fee, arb_profit, exposure_ratio, TAKER_FEE_RATE
+from src.fees import taker_fee, arb_profit, exposure_ratio, maker_arb_profit, TAKER_FEE_RATE
 
 
 def test_taker_fee_at_50_cents():
@@ -59,3 +59,18 @@ def test_exposure_ratio_wide_spread():
     ratio = exposure_ratio(prices)
     assert ratio >= 0
     assert not math.isinf(ratio)
+
+
+def test_maker_arb_profit_no_fees():
+    profit = maker_arb_profit([0.55, 0.50])
+    assert abs(profit - 0.05) < 1e-9
+
+
+def test_maker_arb_profit_below_dollar():
+    profit = maker_arb_profit([0.40, 0.50])
+    assert profit < 0
+
+
+def test_maker_arb_profit_three_legs():
+    profit = maker_arb_profit([0.40, 0.35, 0.35])
+    assert abs(profit - 0.10) < 1e-9

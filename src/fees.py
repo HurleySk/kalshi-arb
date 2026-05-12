@@ -7,10 +7,15 @@ def taker_fee(price: float) -> float:
 
 
 def arb_profit(bid_prices: list[float]) -> float:
-    """Per-contract net profit in dollars after fees."""
+    """Per-contract net profit in dollars after taker fees."""
     gross = sum(bid_prices) - 1.0
     fees = sum(taker_fee(p) for p in bid_prices)
     return gross - fees
+
+
+def maker_arb_profit(bid_prices: list[float]) -> float:
+    """Per-contract net profit as maker (0% fees)."""
+    return sum(bid_prices) - 1.0
 
 
 def exposure_ratio(bid_prices: list[float]) -> float:
