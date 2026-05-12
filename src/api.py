@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 class KalshiAPI:
     def __init__(self, base_url: str, auth: KalshiAuth):
         self.base_url = base_url
+        from urllib.parse import urlparse
+        self._sign_path_prefix = urlparse(base_url).path
         self.auth = auth
         self._session: aiohttp.ClientSession | None = None
 
@@ -33,10 +35,8 @@ class KalshiAPI:
     async def _get(self, path: str, params: dict | None = None) -> dict:
         session = await self._ensure_session()
         url = f"{self.base_url}{path}"
-        full_path = f"/trade-api/v2{path}"
-        if params:
-            full_path += "?" + "&".join(f"{k}={v}" for k, v in params.items())
-        headers = self._headers("GET", full_path)
+        sign_path = f"{self._sign_path_prefix}{path}"
+        headers = self._headers("GET", sign_path)
         async with session.get(url, headers=headers, params=params) as resp:
             resp.raise_for_status()
             return await resp.json()
@@ -44,8 +44,8 @@ class KalshiAPI:
     async def _post(self, path: str, body: dict) -> dict:
         session = await self._ensure_session()
         url = f"{self.base_url}{path}"
-        full_path = f"/trade-api/v2{path}"
-        headers = self._headers("POST", full_path)
+        sign_path = f"{self._sign_path_prefix}{path}"
+        headers = self._headers("POST", sign_path)
         async with session.post(url, headers=headers, json=body) as resp:
             resp.raise_for_status()
             return await resp.json()
@@ -53,8 +53,8 @@ class KalshiAPI:
     async def _delete(self, path: str, body: dict | None = None) -> dict:
         session = await self._ensure_session()
         url = f"{self.base_url}{path}"
-        full_path = f"/trade-api/v2{path}"
-        headers = self._headers("DELETE", full_path)
+        sign_path = f"{self._sign_path_prefix}{path}"
+        headers = self._headers("DELETE", sign_path)
         async with session.delete(url, headers=headers, json=body) as resp:
             resp.raise_for_status()
             return await resp.json()

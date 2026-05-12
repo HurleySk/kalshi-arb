@@ -1,8 +1,5 @@
-import asyncio
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 from src.api import KalshiAPI
-from src.models import Event, Market
 
 
 def _make_api() -> KalshiAPI:
