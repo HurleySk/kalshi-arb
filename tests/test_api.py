@@ -192,3 +192,30 @@ def test_retry_on_connection_error():
         assert call_count == 2
 
     asyncio.run(run())
+
+
+def test_all_retries_exhausted_raises_last_status():
+    """When all 3 attempts return 5xx, raise with the actual last status, not 429."""
+    api = _make_api()
+
+    def mock_request(method, url, **kwargs):
+        resp = MagicMock()
+        resp.status = 503
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=resp)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        return ctx
+
+    async def run():
+        session = MagicMock()
+        session.request = mock_request
+        session.closed = False
+        api._session = session
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            try:
+                await api._request("GET", "/test")
+                assert False, "Should have raised"
+            except aiohttp.ClientResponseError as e:
+                assert e.status == 503, f"Expected 503, got {e.status}"
+
+    asyncio.run(run())

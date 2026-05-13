@@ -84,6 +84,9 @@ def test_cleanup_expired_events():
     assert "E_EXPIRED" not in bot._event_tickers
     assert "E_ACTIVE" in bot._event_tickers
     assert "M_EXP1" not in bot._market_metadata
+    assert "M_EXP2" not in bot._market_metadata
     assert "M_ACT1" in bot._market_metadata
+    assert "M_ACT2" in bot._market_metadata
     assert bot.orderbook_mgr.get_event_for_market("M_EXP1") is None
+    assert bot.orderbook_mgr.get_event_for_market("M_EXP2") is None
     assert bot.orderbook_mgr.get_event_for_market("M_ACT1") == "E_ACTIVE"

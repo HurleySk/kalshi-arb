@@ -306,6 +306,7 @@ class ArbBot:
         for event_ticker in list(self._event_tickers):
             market_tickers = self.orderbook_mgr._event_markets.get(event_ticker, [])
             if not market_tickers:
+                self._event_tickers.discard(event_ticker)
                 continue
             all_expired = True
             for mt in market_tickers:

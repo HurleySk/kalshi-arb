@@ -51,6 +51,7 @@ class KalshiAPI:
         url = f"{self.base_url}{path}"
         sign_path = f"{self._sign_path_prefix}{path}"
         headers = self._headers(method, sign_path)
+        last_retryable_status = 503
 
         for attempt in range(3):
             await self._throttle()
@@ -63,6 +64,9 @@ class KalshiAPI:
             try:
                 async with session.request(method, url, **kwargs) as resp:
                     if resp.status in RETRYABLE_STATUSES:
+                        last_retryable_status = resp.status
+                        if attempt == 2:
+                            break
                         wait = 2 ** attempt + 1
                         logger.warning("Retryable error %d on %s %s, backing off %ds (attempt %d/3)",
                                        resp.status, method, path, wait, attempt + 1)
@@ -82,7 +86,8 @@ class KalshiAPI:
                 await asyncio.sleep(wait)
 
         raise aiohttp.ClientResponseError(
-            request_info=None, history=(), status=429, message="Rate limited after retries"
+            request_info=None, history=(), status=last_retryable_status,
+            message=f"Server error {last_retryable_status} after 3 retries",
         )
 
     async def _get(self, path: str, params: dict | None = None) -> dict:
