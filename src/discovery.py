@@ -55,6 +55,7 @@ class EventDiscovery:
         self.scanner = scanner
         self.event_tickers: set[str] = set()
         self.market_metadata: dict[str, dict] = {}
+        self.monotone_registry = MonotoneFamilyRegistry()
 
     def register_events(self, events: list[Event]) -> list[str]:
         new_tickers = []
@@ -72,6 +73,7 @@ class EventDiscovery:
                     "open_interest": m.open_interest,
                     "liquidity": m.liquidity,
                 }
+                self.monotone_registry.try_register(event.event_ticker, m.ticker, event.title)
         return new_tickers
 
     def cleanup_expired(self) -> set[str]:
@@ -106,6 +108,7 @@ class EventDiscovery:
             for mt in market_tickers:
                 self.market_metadata.pop(mt, None)
             self.orderbook_mgr.unregister_event(event_ticker)
+            self.monotone_registry.unregister_event(event_ticker)
             self.event_tickers.discard(event_ticker)
             logger.info("Cleaned up expired event: %s (%d markets)", event_ticker, len(market_tickers))
 

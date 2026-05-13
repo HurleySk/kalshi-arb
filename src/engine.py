@@ -182,6 +182,38 @@ class ArbEngine:
             signal_type="maker",
         )
 
+    def evaluate_monotone_pair(
+        self,
+        upper_ticker: str,
+        upper_book: Orderbook,
+        lower_ticker: str,
+        lower_book: Orderbook,
+    ) -> TradeSignal | None:
+        from src.fees import monotone_pair_profit
+        upper_bid = upper_book.best_yes_bid()
+        lower_ask = lower_book.best_yes_ask()
+        if upper_bid is None or lower_ask is None:
+            return None
+
+        profit = monotone_pair_profit(upper_bid, lower_ask)
+        if profit <= 0:
+            return None
+
+        profit_pct = profit * 100
+        if profit_pct < self.min_profit_pct:
+            return None
+
+        return TradeSignal(
+            event_ticker=f"{upper_ticker}|{lower_ticker}",
+            legs=[(upper_ticker, upper_bid), (lower_ticker, lower_ask)],
+            net_profit=profit,
+            profit_pct=profit_pct,
+            exposure_ratio=0.0,
+            signal_type="monotone",
+            quantity=1,
+            leg_actions=["sell", "buy"],
+        )
+
     def evaluate_near_expiry(
         self,
         event_ticker: str,

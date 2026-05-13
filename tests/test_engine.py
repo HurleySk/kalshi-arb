@@ -344,6 +344,36 @@ def test_zero_thresholds_accept_all():
     assert signal is not None
 
 
+# --- evaluate_monotone_pair tests ---
+
+def test_evaluate_monotone_pair_fires_on_violation():
+    """Upper bid (0.65) > lower ask (1 - NO bid 0.55 = 0.45): monotone violation."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    upper_book = _ob([(0.65, 100)])
+    lower_book = Orderbook(yes_bids={}, no_bids={55: 100})  # YES ask = 45¢
+    signal = engine.evaluate_monotone_pair("E_upper", upper_book, "E_lower", lower_book)
+    assert signal is not None
+    assert signal.signal_type == "monotone"
+    assert signal.leg_actions == ["sell", "buy"]
+
+
+def test_evaluate_monotone_pair_no_signal_when_no_violation():
+    """Upper bid (0.40) < lower ask (0.55): no violation."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    upper_book = _ob([(0.40, 100)])
+    lower_book = Orderbook(yes_bids={}, no_bids={45: 100})  # YES ask = 55¢
+    signal = engine.evaluate_monotone_pair("E_upper", upper_book, "E_lower", lower_book)
+    assert signal is None
+
+
+def test_evaluate_monotone_pair_respects_min_profit_pct():
+    engine = _make_engine(min_profit_pct=50.0, max_exposure_ratio=10.0)
+    upper_book = _ob([(0.65, 100)])
+    lower_book = Orderbook(yes_bids={}, no_bids={55: 100})
+    signal = engine.evaluate_monotone_pair("E_upper", upper_book, "E_lower", lower_book)
+    assert signal is None
+
+
 # --- evaluate_near_expiry tests ---
 
 def _make_engine_near_expiry(**kwargs):

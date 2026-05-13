@@ -22,6 +22,7 @@ class Dispatcher:
         signal_cooldown: float = 60.0,
         enable_buy_side_arb: bool = True,
         near_expiry_window_minutes: int = 0,
+        monotone_registry=None,
     ):
         self.engine = engine
         self.executor = executor
@@ -31,6 +32,7 @@ class Dispatcher:
         self._signal_cooldown = signal_cooldown
         self._enable_buy_side_arb = enable_buy_side_arb
         self._near_expiry_window_minutes = near_expiry_window_minutes
+        self._monotone_registry = monotone_registry
         self._last_signal_time: dict[str, float] = {}
         self._pending_execution: set[str] = set()
         self._maker_dirty_events: set[str] = set()
@@ -112,6 +114,32 @@ class Dispatcher:
                         }))
                         return ne_signal
 
+        if not signal and self._monotone_registry:
+            for family in self._monotone_registry.get_families().values():
+                for i in range(len(family) - 1):
+                    lower = family[i]
+                    upper = family[i + 1]
+                    lower_book = self.orderbook_mgr.get_orderbook(lower["market_ticker"])
+                    upper_book = self.orderbook_mgr.get_orderbook(upper["market_ticker"])
+                    if lower_book is None or upper_book is None:
+                        continue
+                    mono_signal = self.engine.evaluate_monotone_pair(
+                        upper["market_ticker"], upper_book,
+                        lower["market_ticker"], lower_book,
+                    )
+                    if mono_signal:
+                        key = mono_signal.event_ticker + ":mono"
+                        last = self._last_signal_time.get(key, 0)
+                        if time.time() - last >= self._signal_cooldown:
+                            self._last_signal_time[key] = time.time()
+                            self._pending_execution.add(key)
+                            logger.info(json.dumps({
+                                "event": "monotone_arb_detected",
+                                "pair": mono_signal.event_ticker,
+                                "net_profit": round(mono_signal.net_profit, 6),
+                            }))
+                            return mono_signal
+
         if self.maker and not signal:
             self._maker_dirty_events.add(event_ticker)
 
@@ -137,6 +165,7 @@ class Dispatcher:
         self._pending_execution.discard(event_ticker)
         self._pending_execution.discard(event_ticker + ":buy")
         self._pending_execution.discard(event_ticker + ":ne")
+        self._pending_execution.discard(event_ticker + ":mono")
 
     def consume_dirty_events(self) -> list[str]:
         dirty = list(self._maker_dirty_events)
