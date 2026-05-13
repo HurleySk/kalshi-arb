@@ -69,24 +69,24 @@ def test_cleanup_expired_events():
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     future = (datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    bot._event_tickers = {"E_EXPIRED", "E_ACTIVE"}
+    bot.discovery.event_tickers = {"E_EXPIRED", "E_ACTIVE"}
     bot.orderbook_mgr.register_event("E_EXPIRED", ["M_EXP1", "M_EXP2"])
     bot.orderbook_mgr.register_event("E_ACTIVE", ["M_ACT1", "M_ACT2"])
-    bot._market_metadata = {
+    bot.discovery.market_metadata.update({
         "M_EXP1": {"close_time": past},
         "M_EXP2": {"close_time": past},
         "M_ACT1": {"close_time": future},
         "M_ACT2": {"close_time": future},
-    }
+    })
 
-    bot._cleanup_expired_events_now()
+    bot.discovery.cleanup_expired()
 
-    assert "E_EXPIRED" not in bot._event_tickers
-    assert "E_ACTIVE" in bot._event_tickers
-    assert "M_EXP1" not in bot._market_metadata
-    assert "M_EXP2" not in bot._market_metadata
-    assert "M_ACT1" in bot._market_metadata
-    assert "M_ACT2" in bot._market_metadata
+    assert "E_EXPIRED" not in bot.discovery.event_tickers
+    assert "E_ACTIVE" in bot.discovery.event_tickers
+    assert "M_EXP1" not in bot.discovery.market_metadata
+    assert "M_EXP2" not in bot.discovery.market_metadata
+    assert "M_ACT1" in bot.discovery.market_metadata
+    assert "M_ACT2" in bot.discovery.market_metadata
     assert bot.orderbook_mgr.get_event_for_market("M_EXP1") is None
     assert bot.orderbook_mgr.get_event_for_market("M_EXP2") is None
     assert bot.orderbook_mgr.get_event_for_market("M_ACT1") == "E_ACTIVE"

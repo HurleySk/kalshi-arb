@@ -4,13 +4,13 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from src.auth import KalshiAuth
 from src.api import KalshiAPI
 from src.config import load_config
 from src.dispatch import Dispatcher
+from src.discovery import EventDiscovery
 from src.engine import ArbEngine
 from src.executor import ExecutionManager
 from src.positions import PositionTracker
@@ -54,21 +54,24 @@ class ArbBot:
             tighten_phase2_secs=self.risk_profile.unwind_phase2_secs,
             tighten_step_cents=self.risk_profile.unwind_price_step_cents,
         ) if self.cfg.maker_enabled else None
-        self._event_tickers: set[str] = set()
-        self._market_metadata: dict[str, dict] = {}
-        self.dispatcher = Dispatcher(
-            engine=self.engine,
-            executor=self.executor,
-            maker=self.maker,
-            orderbook_mgr=self.orderbook_mgr,
-            market_metadata=self._market_metadata,
-        )
         self.scanner = MarketScanner(
             ws_url=self.cfg.ws_url,
             auth=self.auth,
             orderbook_mgr=self.orderbook_mgr,
             on_orderbook_update=self._on_orderbook_update,
             on_fill=self._on_fill,
+        )
+        self.discovery = EventDiscovery(
+            api=self.api,
+            orderbook_mgr=self.orderbook_mgr,
+            scanner=self.scanner,
+        )
+        self.dispatcher = Dispatcher(
+            engine=self.engine,
+            executor=self.executor,
+            maker=self.maker,
+            orderbook_mgr=self.orderbook_mgr,
+            market_metadata=self.discovery.market_metadata,
         )
         self._ob_update_queue: asyncio.Queue[str] = asyncio.Queue()
         self._maker_queue: asyncio.Queue | None = None
@@ -178,7 +181,7 @@ class ArbBot:
                     event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
                     if not event_books:
                         continue
-                    meta = {t: self._market_metadata.get(t, {}) for t in event_books}
+                    meta = {t: self.discovery.market_metadata.get(t, {}) for t in event_books}
 
                     if self.maker.is_event_active(event_ticker):
                         await self.maker.on_orderbook_update(event_ticker, event_books)
@@ -267,7 +270,7 @@ class ArbBot:
                 "open_positions=%d | premium_collected=$%.4f | "
                 "session_loss=$%.4f | circuit_breaker=%s | maker_events=%d",
                 uptime,
-                len(self._event_tickers),
+                len(self.discovery.event_tickers),
                 self._stats["arbs_detected"],
                 self._stats["arbs_executed"],
                 self._stats["arbs_failed"],
@@ -278,119 +281,6 @@ class ArbBot:
                 cb_status,
                 maker_count,
             )
-
-    def _cleanup_expired_events_now(self):
-        now = datetime.now(timezone.utc)
-        expired_events: set[str] = set()
-
-        for event_ticker in list(self._event_tickers):
-            market_tickers = self.orderbook_mgr._event_markets.get(event_ticker, [])
-            if not market_tickers:
-                self._event_tickers.discard(event_ticker)
-                continue
-            all_expired = True
-            for mt in market_tickers:
-                meta = self._market_metadata.get(mt, {})
-                close_str = meta.get("close_time", "")
-                if not close_str:
-                    all_expired = False
-                    break
-                try:
-                    close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
-                    if close_dt > now:
-                        all_expired = False
-                        break
-                except (ValueError, TypeError):
-                    all_expired = False
-                    break
-            if all_expired:
-                expired_events.add(event_ticker)
-
-        for event_ticker in expired_events:
-            market_tickers = self.orderbook_mgr._event_markets.get(event_ticker, [])
-            for mt in market_tickers:
-                self._market_metadata.pop(mt, None)
-            self.orderbook_mgr.unregister_event(event_ticker)
-            self._event_tickers.discard(event_ticker)
-            logger.info("Cleaned up expired event: %s (%d markets)", event_ticker, len(market_tickers))
-
-    async def _cleanup_expired_events(self):
-        while True:
-            await asyncio.sleep(300)
-            self._cleanup_expired_events_now()
-
-    def _register_events(self, events) -> list[str]:
-        new_tickers = []
-        for event in events:
-            if event.event_ticker not in self._event_tickers:
-                self._event_tickers.add(event.event_ticker)
-                market_tickers = event.market_tickers()
-                self.orderbook_mgr.register_event(event.event_ticker, market_tickers)
-                new_tickers.extend(market_tickers)
-            for m in event.markets:
-                self._market_metadata[m.ticker] = {
-                    "close_time": m.close_time,
-                    "expected_expiration_time": m.expected_expiration_time,
-                    "volume_24h": m.volume_24h,
-                }
-        return new_tickers
-
-    async def _full_scan(self):
-        logger.info("Starting full event scan...")
-        cursor = ""
-        pages = 0
-        retries = 0
-        max_retries = 3
-        all_events = []
-        while True:
-            try:
-                events, next_cursor = await self.api.fetch_events_page(cursor)
-                all_events.extend(events)
-                pages += 1
-                retries = 0
-                if pages % 10 == 0:
-                    logger.info("Scanning page %d... (%d events collected)", pages, len(all_events))
-                if not next_cursor:
-                    break
-                cursor = next_cursor
-                await asyncio.sleep(0.5)
-            except Exception:
-                retries += 1
-                if retries >= max_retries:
-                    logger.error("Full scan aborted after %d retries at page %d", max_retries, pages)
-                    break
-                logger.exception("Error during full scan at page %d (retry %d/%d)", pages, retries, max_retries)
-                await asyncio.sleep(5)
-
-        def _earliest_close(event):
-            times = [m.close_time for m in event.markets if m.close_time]
-            return min(times) if times else "9999"
-
-        all_events.sort(key=_earliest_close)
-        all_new_tickers = []
-        for event in all_events:
-            all_new_tickers.extend(self._register_events([event]))
-        if all_new_tickers:
-            await self.scanner.subscribe(all_new_tickers)
-        total_new = len(all_new_tickers)
-
-        logger.info(
-            "Full scan complete: %d pages, %d events, %d new markets (sorted by close_time)",
-            pages, len(self._event_tickers), total_new,
-        )
-
-    async def _discover_events(self):
-        await self._full_scan()
-        while True:
-            await asyncio.sleep(self.cfg.event_poll_interval_secs)
-            try:
-                events, _ = await self.api.fetch_events_page("")
-                new_tickers = self._register_events(events)
-                if new_tickers:
-                    await self.scanner.subscribe(new_tickers)
-                    logger.info("Re-poll: %d new markets found", len(new_tickers))
-            except Exception:
-                logger.exception("Error during event re-poll")
 
     async def _close_inherited_positions(self):
         """Close any short positions from previous sessions before trading begins."""
@@ -426,10 +316,10 @@ class ArbBot:
         await self.scanner.connect()
         await self.scanner.subscribe_fills()
 
-        discovery_task = asyncio.create_task(self._discover_events())
+        discovery_task = asyncio.create_task(self.discovery.poll_loop(self.cfg.event_poll_interval_secs))
         listen_task = asyncio.create_task(self.scanner.listen())
         status_task = asyncio.create_task(self._report_status())
-        cleanup_task = asyncio.create_task(self._cleanup_expired_events())
+        cleanup_task = asyncio.create_task(self.discovery.cleanup_loop())
         ob_task = asyncio.create_task(self._process_orderbook_updates())
         maker_task = asyncio.create_task(self._maker_worker()) if self.maker else None
 
@@ -452,7 +342,7 @@ class ArbBot:
         logger.info("=" * 60)
         logger.info("SESSION SUMMARY")
         logger.info("  Uptime: %.0f seconds", uptime)
-        logger.info("  Events tracked: %d", len(self._event_tickers))
+        logger.info("  Events tracked: %d", len(self.discovery.event_tickers))
         logger.info("  Arbs detected: %d", self._stats["arbs_detected"])
         logger.info("  Arbs executed: %d", self._stats["arbs_executed"])
         logger.info("  Arbs failed: %d", self._stats["arbs_failed"])
