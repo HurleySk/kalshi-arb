@@ -25,6 +25,9 @@ class ArbEngine:
         self.near_expiry_min_profit_pct = risk_profile.near_expiry_min_profit_pct
         self.near_expiry_min_bid_depth = risk_profile.near_expiry_min_bid_depth
         self.near_expiry_min_volume_24h = risk_profile.near_expiry_min_volume_24h
+        self.two_sided_min_spread_cents = risk_profile.two_sided_min_spread_cents
+        self.two_sided_max_inventory = risk_profile.two_sided_max_inventory
+        self.two_sided_min_volume_24h = risk_profile.two_sided_min_volume_24h
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -328,4 +331,41 @@ class ArbEngine:
             signal_type="buy_side_taker",
             quantity=quantity,
             leg_actions=["buy"] * len(legs),
+        )
+
+    def evaluate_two_sided(
+        self,
+        ticker: str,
+        book: Orderbook,
+        volume_24h: float = 0.0,
+    ) -> TradeSignal | None:
+        if self.two_sided_max_inventory <= 0:
+            return None
+        if volume_24h < self.two_sided_min_volume_24h:
+            return None
+
+        best_bid = book.best_yes_bid()
+        best_ask = book.best_yes_ask()
+        if best_bid is None or best_ask is None:
+            return None
+
+        spread_cents = round((best_ask - best_bid) * 100)
+        if spread_cents < self.two_sided_min_spread_cents + 2:
+            return None
+
+        post_bid = round(best_bid + 0.01, 2)
+        post_ask = round(best_ask - 0.01, 2)
+
+        if post_bid >= post_ask:
+            return None
+
+        return TradeSignal(
+            event_ticker=ticker,
+            legs=[(ticker, post_bid), (ticker, post_ask)],
+            net_profit=round(post_ask - post_bid, 4),
+            profit_pct=round((post_ask - post_bid) * 100, 2),
+            exposure_ratio=0.0,
+            signal_type="two_sided",
+            quantity=1,
+            leg_actions=["buy", "sell"],
         )

@@ -477,3 +477,47 @@ def test_evaluate_buy_side_respects_depth():
     }
     signal = engine.evaluate_buy_side("E1", orderbooks)
     assert signal is None
+
+
+# --- evaluate_two_sided tests ---
+
+def _make_two_sided_engine(min_spread_cents=6, max_inventory=10, min_volume=0.0):
+    profile = RiskProfile(
+        min_profit_pct=1.0, max_exposure_ratio=3.0, min_volume_24h=0.0,
+        min_bid_depth=1, require_recent_trades=False, near_term_hours=24,
+        hurdle_rate_annual_pct=10.0, unwind_phase1_secs=15, unwind_phase2_secs=30,
+        unwind_price_step_cents=3, two_sided_min_spread_cents=min_spread_cents,
+        two_sided_max_inventory=max_inventory, two_sided_timeout_secs=120,
+        two_sided_min_volume_24h=min_volume,
+    )
+    return ArbEngine(risk_profile=profile)
+
+
+def test_evaluate_two_sided_fires_on_wide_spread():
+    # YES bid 45¢, YES ask (= 1 - NO bid) = 1 - 0.45 = 55¢ → spread = 10¢ > 6¢
+    engine = _make_two_sided_engine(min_spread_cents=6)
+    book = Orderbook(yes_bids={45: 50}, no_bids={45: 50})  # ask = 55¢
+    signal = engine.evaluate_two_sided("M1", book, volume_24h=100.0)
+    assert signal is not None
+    assert signal.signal_type == "two_sided"
+    assert signal.leg_actions == ["buy", "sell"]
+    buy_leg = signal.legs[0]
+    sell_leg = signal.legs[1]
+    assert buy_leg[0] == "M1"
+    assert sell_leg[0] == "M1"
+    assert buy_leg[1] == 0.46   # bid + 1¢
+    assert sell_leg[1] == 0.54  # ask - 1¢
+
+
+def test_evaluate_two_sided_no_signal_on_narrow_spread():
+    engine = _make_two_sided_engine(min_spread_cents=6)
+    book = Orderbook(yes_bids={48: 50}, no_bids={48: 50})  # spread = 4¢
+    signal = engine.evaluate_two_sided("M1", book, volume_24h=100.0)
+    assert signal is None
+
+
+def test_evaluate_two_sided_disabled_when_max_inventory_zero():
+    engine = _make_two_sided_engine(max_inventory=0)
+    book = Orderbook(yes_bids={40: 50}, no_bids={40: 50})
+    signal = engine.evaluate_two_sided("M1", book, volume_24h=100.0)
+    assert signal is None
