@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.auth import KalshiAuth
@@ -298,6 +299,45 @@ class ArbBot:
                 maker_count,
             )
 
+    def _cleanup_expired_events_now(self):
+        now = datetime.now(timezone.utc)
+        expired_events: set[str] = set()
+
+        for event_ticker in list(self._event_tickers):
+            market_tickers = self.orderbook_mgr._event_markets.get(event_ticker, [])
+            if not market_tickers:
+                continue
+            all_expired = True
+            for mt in market_tickers:
+                meta = self._market_metadata.get(mt, {})
+                close_str = meta.get("close_time", "")
+                if not close_str:
+                    all_expired = False
+                    break
+                try:
+                    close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+                    if close_dt > now:
+                        all_expired = False
+                        break
+                except (ValueError, TypeError):
+                    all_expired = False
+                    break
+            if all_expired:
+                expired_events.add(event_ticker)
+
+        for event_ticker in expired_events:
+            market_tickers = self.orderbook_mgr._event_markets.get(event_ticker, [])
+            for mt in market_tickers:
+                self._market_metadata.pop(mt, None)
+            self.orderbook_mgr.unregister_event(event_ticker)
+            self._event_tickers.discard(event_ticker)
+            logger.info("Cleaned up expired event: %s (%d markets)", event_ticker, len(market_tickers))
+
+    async def _cleanup_expired_events(self):
+        while True:
+            await asyncio.sleep(300)
+            self._cleanup_expired_events_now()
+
     def _register_events(self, events) -> list[str]:
         new_tickers = []
         for event in events:
@@ -408,9 +448,10 @@ class ArbBot:
         discovery_task = asyncio.create_task(self._discover_events())
         listen_task = asyncio.create_task(self.scanner.listen())
         status_task = asyncio.create_task(self._report_status())
+        cleanup_task = asyncio.create_task(self._cleanup_expired_events())
         maker_task = asyncio.create_task(self._maker_worker()) if self.maker else None
 
-        tasks = [discovery_task, listen_task, status_task]
+        tasks = [discovery_task, listen_task, status_task, cleanup_task]
         if maker_task:
             tasks.append(maker_task)
 
