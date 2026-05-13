@@ -1,11 +1,51 @@
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 
 from src.models import Event
 from src.scanner import OrderbookManager
 
 logger = logging.getLogger(__name__)
+
+_THRESHOLD_PATTERN = re.compile(
+    r'\b(above|exceed|over|reach|below|under)\s+([\d,]+(?:\.\d+)?)\b',
+    re.IGNORECASE,
+)
+
+
+class MonotoneFamilyRegistry:
+    def __init__(self):
+        # template_key → list of {event_ticker, market_ticker, threshold, direction}
+        self._families: dict[str, list[dict]] = {}
+
+    def try_register(self, event_ticker: str, market_ticker: str, title: str) -> str | None:
+        m = _THRESHOLD_PATTERN.search(title)
+        if not m:
+            return None
+        direction = m.group(1).lower()
+        threshold = float(m.group(2).replace(",", ""))
+        template = title[:m.start(2)] + "*" + title[m.end(2):]
+        key = template.lower()
+        if key not in self._families:
+            self._families[key] = []
+        self._families[key].append({
+            "event_ticker": event_ticker,
+            "market_ticker": market_ticker,
+            "threshold": threshold,
+            "direction": direction,
+        })
+        self._families[key].sort(key=lambda x: x["threshold"])
+        return key
+
+    def get_families(self) -> dict[str, list[dict]]:
+        return {k: v for k, v in self._families.items() if len(v) >= 2}
+
+    def unregister_event(self, event_ticker: str):
+        for key in list(self._families.keys()):
+            self._families[key] = [m for m in self._families[key] if m["event_ticker"] != event_ticker]
+            if len(self._families[key]) == 0:
+                del self._families[key]
 
 
 class EventDiscovery:

@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, AsyncMock
 
-from src.discovery import EventDiscovery
+from src.discovery import EventDiscovery, MonotoneFamilyRegistry
 from src.scanner import OrderbookManager
 from src.models import Event, Market
 
@@ -44,6 +44,43 @@ def test_register_events_skips_duplicates():
     discovery.register_events([event])
     new_tickers = discovery.register_events([event])
     assert new_tickers == []
+
+
+def test_registers_threshold_pair_with_same_template():
+    reg = MonotoneFamilyRegistry()
+    reg.try_register("E1", "M1", "Will S&P 500 close above 5,000 on May 15?")
+    reg.try_register("E2", "M2", "Will S&P 500 close above 5,100 on May 15?")
+    families = reg.get_families()
+    assert len(families) == 1
+    family = list(families.values())[0]
+    assert len(family) == 2
+
+
+def test_does_not_group_unrelated_events():
+    reg = MonotoneFamilyRegistry()
+    reg.try_register("E1", "M1", "Will it rain in Seattle?")
+    reg.try_register("E2", "M2", "Will the Fed raise rates?")
+    assert len(reg.get_families()) == 0
+
+
+def test_family_sorted_by_threshold_ascending():
+    reg = MonotoneFamilyRegistry()
+    reg.try_register("E1", "M1", "S&P above 5,200 by June?")
+    reg.try_register("E2", "M2", "S&P above 5,000 by June?")
+    reg.try_register("E3", "M3", "S&P above 5,100 by June?")
+    families = reg.get_families()
+    assert len(families) == 1
+    members = list(families.values())[0]
+    thresholds = [m["threshold"] for m in members]
+    assert thresholds == sorted(thresholds)
+
+
+def test_try_register_returns_family_key_when_matched():
+    reg = MonotoneFamilyRegistry()
+    key1 = reg.try_register("E1", "M1", "S&P above 5,000 by June?")
+    key2 = reg.try_register("E2", "M2", "S&P above 5,100 by June?")
+    assert key1 is not None
+    assert key1 == key2
 
 
 def test_cleanup_removes_expired():
