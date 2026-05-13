@@ -440,6 +440,36 @@ def test_near_expiry_uses_near_expiry_min_profit_pct():
     assert engine.evaluate_near_expiry("E1", orderbooks, market_metadata=meta) is None
 
 
+def test_near_expiry_respects_min_open_interest():
+    """evaluate_near_expiry must apply min_open_interest filter (inherited from _validate_legs)."""
+    profile = RiskProfile(
+        min_profit_pct=2.0, max_exposure_ratio=10.0, min_volume_24h=0.0,
+        min_bid_depth=1, require_recent_trades=False, near_term_hours=24,
+        hurdle_rate_annual_pct=10.0, unwind_phase1_secs=15, unwind_phase2_secs=30,
+        unwind_price_step_cents=3, min_open_interest=100.0,
+        near_expiry_min_profit_pct=1.0,
+    )
+    engine = ArbEngine(risk_profile=profile)
+    orderbooks = {"M1": _ob([(0.40, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    meta = {t: {"volume_24h": 0, "open_interest": 5.0} for t in ["M1", "M2", "M3"]}
+    assert engine.evaluate_near_expiry("E1", orderbooks, market_metadata=meta) is None
+
+
+def test_near_expiry_respects_min_liquidity():
+    """evaluate_near_expiry must apply min_liquidity filter (inherited from _validate_legs)."""
+    profile = RiskProfile(
+        min_profit_pct=2.0, max_exposure_ratio=10.0, min_volume_24h=0.0,
+        min_bid_depth=1, require_recent_trades=False, near_term_hours=24,
+        hurdle_rate_annual_pct=10.0, unwind_phase1_secs=15, unwind_phase2_secs=30,
+        unwind_price_step_cents=3, min_liquidity=500.0,
+        near_expiry_min_profit_pct=1.0,
+    )
+    engine = ArbEngine(risk_profile=profile)
+    orderbooks = {"M1": _ob([(0.40, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    meta = {t: {"volume_24h": 0, "liquidity": 10.0} for t in ["M1", "M2", "M3"]}
+    assert engine.evaluate_near_expiry("E1", orderbooks, market_metadata=meta) is None
+
+
 # --- evaluate_buy_side tests ---
 
 def test_evaluate_buy_side_profitable():

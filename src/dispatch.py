@@ -172,7 +172,7 @@ class Dispatcher:
                     continue
                 try:
                     close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
-                    self._market_expiry_cache[mt] = close_dt
+                    self._market_expiry_cache[mt] = close_dt  # close_time is immutable once set
                 except (ValueError, TypeError):
                     continue
             if now < close_dt <= cutoff:
