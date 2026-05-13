@@ -17,6 +17,7 @@ from src.executor import ExecutionManager
 from src.positions import PositionTracker
 from src.maker import MakerManager
 from src.risk import load_risk_profile
+from src.two_sided import TwoSidedManager
 from src.scanner import MarketScanner, OrderbookManager
 
 logger = logging.getLogger("kalshi-arb")
@@ -54,6 +55,10 @@ class ArbBot:
             max_events=self.cfg.max_maker_events,
             risk_profile=self.risk_profile,
         ) if self.cfg.maker_enabled else None
+        self.two_sided = TwoSidedManager(
+            api=self.api,
+            risk_profile=self.risk_profile,
+        ) if self.risk_profile.two_sided_max_inventory > 0 else None
         self.scanner = MarketScanner(
             ws_url=self.cfg.ws_url,
             auth=self.auth,
@@ -114,8 +119,13 @@ class ArbBot:
         root.addHandler(console)
 
     def _on_fill(self, fill_data: dict):
+        order_id = fill_data.get("order_id", "")
+        if self.two_sided and self.two_sided.owns_order(order_id):
+            price = float(fill_data.get("yes_price_dollars", 0))
+            quantity = int(float(fill_data.get("count_fp", 0)))
+            asyncio.create_task(self.two_sided.handle_fill(order_id, price, quantity))
+            return
         if self.dispatcher.route_fill(fill_data) == "maker":
-            order_id = fill_data.get("order_id", "")
             ticker = fill_data.get("market_ticker", "")
             price = float(fill_data.get("yes_price_dollars", 0))
             quantity = int(float(fill_data.get("count_fp", 0)))
@@ -208,6 +218,13 @@ class ArbBot:
                             "net_profit": round(maker_signal.net_profit, 6),
                             "profit_pct": round(maker_signal.profit_pct, 2),
                         }))
+
+                    if self.two_sided:
+                        for mt, book in event_books.items():
+                            vol = self.discovery.market_metadata.get(mt, {}).get("volume_24h", 0.0)
+                            ts_signal = self.engine.evaluate_two_sided(mt, book, volume_24h=vol)
+                            if ts_signal and not self.two_sided.owns_order(mt):
+                                await self.two_sided.post(ts_signal)
                 except Exception:
                     logger.exception("Maker worker error for %s", event_ticker)
                     failed_until[event_ticker] = time.time() + 60
@@ -348,6 +365,8 @@ class ArbBot:
         tasks = [discovery_task, listen_task, status_task, cleanup_task, ob_task]
         if maker_task:
             tasks.append(maker_task)
+        if self.two_sided:
+            tasks.append(asyncio.create_task(self.two_sided.timeout_loop()))
 
         try:
             await asyncio.gather(*tasks)
