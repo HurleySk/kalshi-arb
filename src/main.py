@@ -257,16 +257,15 @@ class ArbBot:
             await asyncio.sleep(30)
             uptime = time.time() - self._stats["started_at"]
             positions = self.positions.open_positions()
-            realized_pnl = sum(
-                p.avg_price * p.quantity for p in positions
-            )
+            unrealized_premium = sum(p.avg_price * p.quantity for p in positions)
+            realized_pnl = self.positions.realized_pnl
             cb_status = "TRIPPED" if self.executor.is_circuit_breaker_tripped() else "ok"
             maker_count = self.maker.active_event_count() if self.maker else 0
             logger.info(
                 "STATUS | uptime=%.0fs | events=%d | arbs_detected=%d | "
                 "arbs_executed=%d | arbs_failed=%d | theoretical_profit=$%.4f | "
-                "open_positions=%d | premium_collected=$%.4f | "
-                "session_loss=$%.4f | circuit_breaker=%s | maker_events=%d",
+                "open_positions=%d | unrealized_premium=$%.4f | "
+                "realized_pnl=$%.4f | session_loss=$%.4f | circuit_breaker=%s | maker_events=%d",
                 uptime,
                 len(self.discovery.event_tickers),
                 self._stats["arbs_detected"],
@@ -274,6 +273,7 @@ class ArbBot:
                 self._stats["arbs_failed"],
                 self._stats["total_theoretical_profit"],
                 len(positions),
+                unrealized_premium,
                 realized_pnl,
                 self.executor.session_realized_loss,
                 cb_status,
