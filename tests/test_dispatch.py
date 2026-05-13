@@ -92,6 +92,39 @@ def test_dispatch_respects_signal_cooldown():
     assert result2 is None
 
 
+def test_dispatcher_routes_near_expiry_signal():
+    from unittest.mock import MagicMock
+    from src.models import TradeSignal
+    from datetime import datetime, timezone, timedelta
+
+    ne_signal = TradeSignal(
+        event_ticker="E1", legs=[("M1", 0.55), ("M2", 0.55)], net_profit=0.02,
+        profit_pct=2.0, exposure_ratio=1.0, signal_type="near_expiry_taker",
+    )
+    engine = MagicMock()
+    engine.evaluate.return_value = None
+    engine.evaluate_buy_side.return_value = None
+    engine.evaluate_near_expiry.return_value = ne_signal
+    executor = MagicMock()
+    executor.is_circuit_breaker_tripped.return_value = False
+    executor.is_executing.return_value = False
+    executor.is_event_blacklisted.return_value = False
+    ob_mgr = MagicMock()
+    ob_mgr.get_event_for_market.return_value = "E1"
+    ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock()}
+    ob_mgr._event_markets = {"E1": ["M1"]}
+
+    close_soon = (datetime.now(timezone.utc) + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    market_metadata = {"M1": {"close_time": close_soon}}
+
+    dispatcher = Dispatcher(engine=engine, executor=executor, maker=None,
+                            orderbook_mgr=ob_mgr, market_metadata=market_metadata,
+                            near_expiry_window_minutes=30)
+    signal = dispatcher.process_orderbook_update("M1")
+    assert signal is not None
+    assert signal.signal_type == "near_expiry_taker"
+
+
 def test_dispatcher_routes_buy_side_signal():
     """Dispatcher returns a buy_side_taker signal when evaluate_buy_side fires."""
     from unittest.mock import MagicMock

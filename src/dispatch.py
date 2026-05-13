@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from datetime import datetime, timezone, timedelta
 
 from src.engine import ArbEngine
 from src.executor import ExecutionManager
@@ -20,6 +21,7 @@ class Dispatcher:
         market_metadata: dict[str, dict],
         signal_cooldown: float = 60.0,
         enable_buy_side_arb: bool = True,
+        near_expiry_window_minutes: int = 0,
     ):
         self.engine = engine
         self.executor = executor
@@ -28,6 +30,7 @@ class Dispatcher:
         self.market_metadata = market_metadata
         self._signal_cooldown = signal_cooldown
         self._enable_buy_side_arb = enable_buy_side_arb
+        self._near_expiry_window_minutes = near_expiry_window_minutes
         self._last_signal_time: dict[str, float] = {}
         self._pending_execution: set[str] = set()
         self._maker_dirty_events: set[str] = set()
@@ -89,14 +92,49 @@ class Dispatcher:
                         )
                         return buy_signal
 
+        if not signal and self._is_near_expiry(event_ticker):
+            ne_signal = self.engine.evaluate_near_expiry(event_ticker, event_books, market_metadata=meta)
+            if ne_signal and not self.executor.is_executing():
+                if not self.executor.is_event_blacklisted(event_ticker):
+                    key = event_ticker + ":ne"
+                    last = self._last_signal_time.get(key, 0)
+                    if time.time() - last >= self._signal_cooldown:
+                        self._last_signal_time[key] = time.time()
+                        self._pending_execution.add(key)
+                        logger.info(json.dumps({
+                            "event": "near_expiry_arb_detected",
+                            "event_ticker": event_ticker,
+                            "legs": ne_signal.legs,
+                            "net_profit": round(ne_signal.net_profit, 6),
+                            "profit_pct": round(ne_signal.profit_pct, 2),
+                        }))
+                        return ne_signal
+
         if self.maker and not signal:
             self._maker_dirty_events.add(event_ticker)
 
         return None
 
+    def _is_near_expiry(self, event_ticker: str) -> bool:
+        if self._near_expiry_window_minutes <= 0:
+            return False
+        now = datetime.now(timezone.utc)
+        cutoff = now + timedelta(minutes=self._near_expiry_window_minutes)
+        for mt in self.orderbook_mgr._event_markets.get(event_ticker, []):
+            close_str = self.market_metadata.get(mt, {}).get("close_time", "")
+            if close_str:
+                try:
+                    close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+                    if now < close_dt <= cutoff:
+                        return True
+                except (ValueError, TypeError):
+                    pass
+        return False
+
     def mark_execution_complete(self, event_ticker: str):
         self._pending_execution.discard(event_ticker)
         self._pending_execution.discard(event_ticker + ":buy")
+        self._pending_execution.discard(event_ticker + ":ne")
 
     def consume_dirty_events(self) -> list[str]:
         dirty = list(self._maker_dirty_events)
