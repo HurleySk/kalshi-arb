@@ -22,6 +22,8 @@ def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0, **kwargs):
         unwind_phase1_secs=15,
         unwind_phase2_secs=30,
         unwind_price_step_cents=3,
+        min_open_interest=kwargs.get("min_open_interest", 0.0),
+        min_liquidity=kwargs.get("min_liquidity", 0.0),
     )
     return ArbEngine(
         risk_profile=profile,
@@ -311,3 +313,32 @@ def test_signal_quantity_defaults_to_one():
     signal = engine.evaluate("E1", orderbooks)
     assert signal is not None
     assert signal.quantity == 1
+
+
+def test_min_open_interest_rejects_low_oi():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_open_interest=100.0)
+    orderbooks = {"M1": _ob([(0.40, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    meta = {"M1": {"open_interest": 50}, "M2": {"open_interest": 200}, "M3": {"open_interest": 200}}
+    signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
+    assert signal is None
+
+
+def test_min_liquidity_rejects_illiquid():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_liquidity=1000.0)
+    orderbooks = {"M1": _ob([(0.40, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    meta = {"M1": {"liquidity": 500}, "M2": {"liquidity": 2000}, "M3": {"liquidity": 2000}}
+    signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
+    assert signal is None
+
+
+def test_zero_thresholds_accept_all():
+    """Default 0 thresholds should not filter anything."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {"M1": _ob([(0.40, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    meta = {
+        "M1": {"open_interest": 0, "liquidity": 0},
+        "M2": {"open_interest": 0, "liquidity": 0},
+        "M3": {"open_interest": 0, "liquidity": 0},
+    }
+    signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
+    assert signal is not None

@@ -13,6 +13,8 @@ class RiskProfile:
     unwind_phase1_secs: int
     unwind_phase2_secs: int
     unwind_price_step_cents: int
+    min_open_interest: float = 0.0
+    min_liquidity: float = 0.0
 
 
 PRESETS: dict[str, dict] = {

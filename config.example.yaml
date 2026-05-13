@@ -28,6 +28,8 @@ strategy:
   # unwind_phase1_secs: 15
   # unwind_phase2_secs: 30
   # unwind_price_step_cents: 3
+  # min_open_interest: 0
+  # min_liquidity: 0
 
 logging:
   level: INFO

@@ -20,6 +20,8 @@ class ArbEngine:
         self.maker_max_exposure_ratio = 50.0
         self.maker_max_horizon_hours = maker_max_horizon_hours
         self.max_contracts_per_arb = max_contracts_per_arb
+        self.min_open_interest = risk_profile.min_open_interest
+        self.min_liquidity = risk_profile.min_liquidity
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -92,6 +94,18 @@ class ArbEngine:
                 meta = market_metadata.get(ticker, {})
                 volume = meta.get("volume_24h", 0)
                 if volume < self.min_volume_24h:
+                    return None
+
+        if self.min_open_interest > 0 and market_metadata:
+            for ticker, _ in legs:
+                meta = market_metadata.get(ticker, {})
+                if meta.get("open_interest", 0) < self.min_open_interest:
+                    return None
+
+        if self.min_liquidity > 0 and market_metadata:
+            for ticker, _ in legs:
+                meta = market_metadata.get(ticker, {})
+                if meta.get("liquidity", 0) < self.min_liquidity:
                     return None
 
         return legs

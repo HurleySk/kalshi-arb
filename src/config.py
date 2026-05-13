@@ -66,6 +66,7 @@ def load_config(path: str) -> Config:
         "require_recent_trades", "max_exposure_ratio",
         "near_term_hours", "hurdle_rate_annual_pct",
         "unwind_phase1_secs", "unwind_phase2_secs", "unwind_price_step_cents",
+        "min_open_interest", "min_liquidity",
     }
     strategy_overrides = {k: v for k, v in strategy.items() if k in override_keys}
 
