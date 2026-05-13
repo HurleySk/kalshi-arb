@@ -33,6 +33,7 @@ strategy:
 
   # Buy-side structural arb (buy all outcomes when sum(asks) < $1 - fees)
   # enable_buy_side_arb: true
+  # min_buy_side_coverage: 0.90  # reject events where ask_sum < this (applied after hard guards ask_sum<0.60/max_ask<0.20); conservative=0.90, moderate=0.88, aggressive=0.85
 
   # Near-expiry stale order harvesting (relaxed taker within window of close)
   # near_expiry_window_minutes: 30     # 0 = disabled; conservative=30, moderate=60, aggressive=120

@@ -25,6 +25,7 @@ class RiskProfile:
     two_sided_timeout_secs: int = 120
     two_sided_min_volume_24h: float = 50.0
     buy_side_max_horizon_hours: float = 0.0  # 0 = disabled
+    min_buy_side_coverage: float = 0.0  # 0 = disabled; rejects ask_sum below this floor
 
 
 PRESETS: dict[str, dict] = {
@@ -49,6 +50,7 @@ PRESETS: dict[str, dict] = {
         "two_sided_timeout_secs": 120,
         "two_sided_min_volume_24h": 50.0,
         "buy_side_max_horizon_hours": 336.0,  # 14 days
+        "min_buy_side_coverage": 0.90,
     },
     "moderate": {
         "min_volume_24h": 10.0,
@@ -71,6 +73,7 @@ PRESETS: dict[str, dict] = {
         "two_sided_timeout_secs": 180,
         "two_sided_min_volume_24h": 10.0,
         "buy_side_max_horizon_hours": 720.0,  # 30 days
+        "min_buy_side_coverage": 0.88,
     },
     "aggressive": {
         "min_volume_24h": 0.0,
@@ -93,6 +96,7 @@ PRESETS: dict[str, dict] = {
         "two_sided_timeout_secs": 300,
         "two_sided_min_volume_24h": 0.0,
         "buy_side_max_horizon_hours": 0.0,  # unlimited
+        "min_buy_side_coverage": 0.85,
     },
 }
 

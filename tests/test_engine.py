@@ -24,6 +24,7 @@ def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0, **kwargs):
         unwind_price_step_cents=3,
         min_open_interest=kwargs.get("min_open_interest", 0.0),
         min_liquidity=kwargs.get("min_liquidity", 0.0),
+        min_buy_side_coverage=kwargs.get("min_buy_side_coverage", 0.0),
     )
     return ArbEngine(
         risk_profile=profile,
@@ -539,6 +540,31 @@ def test_evaluate_buy_side_passes_when_all_markets_present():
     }
     signal = engine.evaluate_buy_side("E1", orderbooks, expected_market_count=2)
     assert signal is not None  # ask_sum = 0.85, max_ask = 0.55, profit > 0, passes
+
+
+def test_evaluate_buy_side_rejects_below_coverage_floor():
+    # ask_sum = 0.83 (3 legs: 41¢+41¢+1¢), floor = 0.88 → rejected as non-exhaustive
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_buy_side_coverage=0.88)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={59: 100}),  # ask = 41¢
+        "M2": Orderbook(yes_bids={}, no_bids={59: 100}),  # ask = 41¢
+        "M3": Orderbook(yes_bids={}, no_bids={99: 100}),  # ask = 1¢
+    }
+    # ask_sum = 0.83 < floor 0.88 → None
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is None
+
+
+def test_evaluate_buy_side_passes_above_coverage_floor():
+    # ask_sum = 0.91 (2 legs: 55¢+36¢), floor = 0.88 → allowed through
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_buy_side_coverage=0.88)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={45: 100}),  # ask = 55¢
+        "M2": Orderbook(yes_bids={}, no_bids={64: 100}),  # ask = 36¢
+    }
+    # ask_sum = 0.91 ≥ floor 0.88 → evaluated normally (profitable since 0.91 < $1 - fees)
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is not None
 
 
 # --- evaluate_two_sided tests ---

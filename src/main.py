@@ -80,6 +80,7 @@ class ArbBot:
             enable_buy_side_arb=self.risk_profile.enable_buy_side_arb,
             near_expiry_window_minutes=self.risk_profile.near_expiry_window_minutes,
             monotone_registry=self.discovery.monotone_registry,
+            event_total_markets=self.discovery.event_total_markets,
         )
         self._ob_update_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10000)
         self._maker_queue: asyncio.Queue | None = None

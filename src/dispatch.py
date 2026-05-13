@@ -23,6 +23,7 @@ class Dispatcher:
         enable_buy_side_arb: bool = True,
         near_expiry_window_minutes: int = 0,
         monotone_registry=None,
+        event_total_markets: dict[str, int] | None = None,
     ):
         self.engine = engine
         self.executor = executor
@@ -33,6 +34,7 @@ class Dispatcher:
         self._enable_buy_side_arb = enable_buy_side_arb
         self._near_expiry_window_minutes = near_expiry_window_minutes
         self._monotone_registry = monotone_registry
+        self._event_total_markets: dict[str, int] = event_total_markets or {}
         self._last_signal_time: dict[str, float] = {}
         self._pending_execution: set[str] = set()
         self._maker_dirty_events: set[str] = set()
@@ -75,10 +77,11 @@ class Dispatcher:
             return signal
 
         if not signal and self._enable_buy_side_arb:
+            api_total = self._event_total_markets.get(event_ticker)
             registered = self.orderbook_mgr.get_registered_market_count(event_ticker)
             buy_signal = self.engine.evaluate_buy_side(
                 event_ticker, event_books, market_metadata=meta,
-                expected_market_count=registered,
+                expected_market_count=api_total if api_total else registered,
             )
             if buy_signal and not self.executor.is_executing():
                 if not self.executor.is_event_blacklisted(event_ticker):

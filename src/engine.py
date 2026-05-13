@@ -29,6 +29,7 @@ class ArbEngine:
         self.two_sided_max_inventory = risk_profile.two_sided_max_inventory
         self.two_sided_min_volume_24h = risk_profile.two_sided_min_volume_24h
         self.buy_side_max_horizon_hours = risk_profile.buy_side_max_horizon_hours
+        self.min_buy_side_coverage = risk_profile.min_buy_side_coverage
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -308,6 +309,14 @@ class ArbEngine:
             logger.debug(
                 "buy-side coverage-filtered %s: ask_sum=%.4f max_ask=%.4f — likely missing high-probability outcome legs",
                 event_ticker, ask_sum, max_ask,
+            )
+            return None
+
+        floor = self.min_buy_side_coverage
+        if floor > 0 and ask_sum < floor:
+            logger.debug(
+                "buy-side coverage-floor-filtered %s: ask_sum=%.4f < min_buy_side_coverage=%.2f",
+                event_ticker, ask_sum, floor,
             )
             return None
 

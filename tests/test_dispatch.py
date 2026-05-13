@@ -218,6 +218,35 @@ def test_dispatcher_routes_buy_side_signal():
     assert signal.signal_type == "buy_side_taker"
 
 
+def test_dispatcher_uses_api_total_over_registered_count():
+    """When event_total_markets has a higher count than registered, api_total flows to evaluate_buy_side."""
+    from unittest.mock import MagicMock, call
+    from src.models import TradeSignal
+
+    engine = MagicMock()
+    engine.evaluate.return_value = None
+    engine.evaluate_buy_side.return_value = None
+    executor = MagicMock()
+    executor.is_circuit_breaker_tripped.return_value = False
+    executor.is_executing.return_value = False
+    executor.is_event_blacklisted.return_value = False
+    ob_mgr = MagicMock()
+    ob_mgr.get_event_for_market.return_value = "E1"
+    ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock(), "M2": MagicMock()}
+    ob_mgr.get_registered_market_count.return_value = 2
+
+    # API says 5 total markets; only 2 are active/registered
+    dispatcher = Dispatcher(engine=engine, executor=executor, maker=None,
+                            orderbook_mgr=ob_mgr, market_metadata={},
+                            enable_buy_side_arb=True,
+                            event_total_markets={"E1": 5})
+    dispatcher.process_orderbook_update("M1")
+
+    engine.evaluate_buy_side.assert_called_once()
+    _, kwargs = engine.evaluate_buy_side.call_args
+    assert kwargs["expected_market_count"] == 5  # api_total, not registered (2)
+
+
 def test_dispatcher_routes_monotone_signal():
     """Dispatcher returns a monotone signal when evaluate_monotone_pair fires on an adjacent pair."""
     from unittest.mock import MagicMock

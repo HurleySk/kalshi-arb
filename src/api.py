@@ -104,6 +104,7 @@ class KalshiAPI:
         for e in raw.get("events", []):
             if not e.get("mutually_exclusive", False):
                 continue
+            raw_markets = e.get("markets", [])
             markets = [
                 Market(
                     ticker=m["ticker"],
@@ -116,7 +117,7 @@ class KalshiAPI:
                     open_interest=float(m.get("open_interest_fp", 0)),
                     liquidity=float(m.get("liquidity_dollars", 0)),
                 )
-                for m in e.get("markets", [])
+                for m in raw_markets
                 if m.get("status") == "active"
             ]
             if len(markets) < 2:
@@ -128,6 +129,7 @@ class KalshiAPI:
                     series_ticker=e.get("series_ticker", ""),
                     mutually_exclusive=True,
                     markets=markets,
+                    total_market_count=len(raw_markets),
                 )
             )
         return events
@@ -186,7 +188,13 @@ class KalshiAPI:
         return await self._delete(f"/portfolio/orders/{order_id}")
 
     async def batch_cancel_orders(self, order_ids: list[str]) -> dict:
-        return await self._delete("/portfolio/orders/batched", {"ids": order_ids})
+        # API enforces a per-request limit; chunk to avoid "too_many_orders_in_batch" 400s
+        _CHUNK = 20
+        results: dict = {}
+        for i in range(0, len(order_ids), _CHUNK):
+            resp = await self._delete("/portfolio/orders/batched", {"ids": order_ids[i:i + _CHUNK]})
+            results.update(resp or {})
+        return results
 
     async def get_positions(self) -> dict:
         return await self._get("/portfolio/positions")

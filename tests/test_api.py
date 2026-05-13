@@ -90,6 +90,31 @@ def test_parse_events_filters_single_market():
     assert len(events) == 0
 
 
+def test_parse_events_captures_total_market_count_including_inactive():
+    # API returns 2 active + 1 inactive markets; total_market_count should be 3, active list len 2
+    api = _make_api()
+    raw = {
+        "events": [
+            {
+                "event_ticker": "E1",
+                "title": "Test",
+                "series_ticker": "S1",
+                "mutually_exclusive": True,
+                "markets": [
+                    {"ticker": "M1", "event_ticker": "E1", "title": "O1", "status": "active"},
+                    {"ticker": "M2", "event_ticker": "E1", "title": "O2", "status": "active"},
+                    {"ticker": "M3", "event_ticker": "E1", "title": "O3", "status": "inactive"},
+                ],
+            }
+        ],
+        "cursor": "",
+    }
+    events = api.parse_events(raw)
+    assert len(events) == 1
+    assert len(events[0].markets) == 2          # only active registered
+    assert events[0].total_market_count == 3    # full API count stored
+
+
 def test_build_sell_order():
     api = _make_api()
     order = api.build_sell_order(ticker="M1", yes_price=0.55, quantity=10)

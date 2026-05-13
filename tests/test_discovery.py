@@ -34,6 +34,18 @@ def test_register_events_stores_metadata():
     assert discovery.market_metadata["M1"]["liquidity"] == 2000.0
 
 
+def test_register_events_stores_total_market_count():
+    # Event with total_market_count=3 (1 inactive not in markets list) should be stored
+    discovery, _ = _make_discovery()
+    m1 = Market(ticker="M1", event_ticker="E1", title="O1", status="active", volume_24h=0.0)
+    m2 = Market(ticker="M2", event_ticker="E1", title="O2", status="active", volume_24h=0.0)
+    event = Event(event_ticker="E1", title="Test", series_ticker="S1",
+                  mutually_exclusive=True, markets=[m1, m2], total_market_count=3)
+
+    discovery.register_events([event])
+    assert discovery.event_total_markets["E1"] == 3
+
+
 def test_register_events_skips_duplicates():
     discovery, _ = _make_discovery()
     market = Market(ticker="M1", event_ticker="E1", title="Test",
@@ -103,6 +115,8 @@ def test_cleanup_removes_expired():
     assert "E_ACT" not in removed
     assert "M_EXP" not in discovery.market_metadata
     assert "M_ACT" in discovery.market_metadata
+    assert "E_EXP" not in discovery.event_total_markets
+    assert "E_ACT" in discovery.event_total_markets
 
 
 def test_cleanup_removes_monotone_registry_entries():

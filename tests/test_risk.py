@@ -89,3 +89,9 @@ def test_aggressive_two_sided_fields():
     profile = load_risk_profile("aggressive", {})
     assert profile.two_sided_min_spread_cents == 2
     assert profile.two_sided_max_inventory == 50
+
+
+def test_min_buy_side_coverage_preset_values():
+    assert load_risk_profile("conservative", {}).min_buy_side_coverage == 0.90
+    assert load_risk_profile("moderate", {}).min_buy_side_coverage == 0.88
+    assert load_risk_profile("aggressive", {}).min_buy_side_coverage == 0.85

@@ -53,6 +53,7 @@ class Event:
     series_ticker: str
     mutually_exclusive: bool
     markets: list[Market] = field(default_factory=list)
+    total_market_count: int = 0  # all markets from API including inactive
 
     def market_tickers(self) -> list[str]:
         return [m.ticker for m in self.markets]
