@@ -108,8 +108,16 @@ Taker fee: `0.07 * price * (1 - price)` per contract. All orders cross the sprea
 
 **IMPORTANT:** After any change to config parsing, risk profiles, or strategy parameters, always diff `config.yaml` against `config.example.yaml` and remove stale overrides. Old strategy fields (e.g. `min_bid_depth: 1`) silently override risk profile defaults and can neutralize new protections.
 
+## Observability
+
+Near-miss signals are logged at DEBUG level (set `logging.level: DEBUG` in config to enable):
+- `taker near-miss <event>: bid_sum=X.XXXX` — passed all filters but bid sum < taker breakeven (~$1.07)
+- `maker near-miss <event>: bid_sum=X.XXXX` — passed all filters but bid sum < $1.00
+- `near-miss <event>: bid_sum=X.XXXX blocked — <ticker> depth/volume < min` — price was in range but depth/volume filter rejected
+- `maker horizon-filtered <event>: ... closes_in=Xh horizon=Yh` — maker-profitable signal blocked by horizon cutoff
+- STATUS line includes `maker_horizon=N` — count of events closing within `maker_max_horizon_hours` right now
+
 ## Known Limitations
 
 - `calculate_event_pnl` in `positions.py` assumes equal fill quantities across all legs
 - `profit_pct` is relative to $1 max payout, not capital at risk
-- `open_interest`, `liquidity` fields are extracted from the API but not yet used for filtering

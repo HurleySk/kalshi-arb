@@ -17,7 +17,7 @@ strategy:
   maker_enabled: true                 # Post maker orders on near-arb events (0% fees)
   maker_fill_mode: cancel_and_take    # cancel_and_take | tighten_on_fill
   max_maker_events: 3                 # Max events with resting maker orders
-  maker_max_horizon_hours: 1          # Only post maker orders on events closing within this window
+  maker_max_horizon_hours: 4          # Only post maker orders on events closing within this window
   max_contracts_per_arb: 1            # Max contracts per arb execution (default: 1)
   # Optional overrides (uncomment to customize):
   # min_volume_24h: 50

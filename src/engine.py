@@ -44,13 +44,15 @@ class ArbEngine:
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
     ) -> TradeSignal | None:
-        legs = self._validate_legs(orderbooks, market_metadata)
+        legs = self._validate_legs(orderbooks, market_metadata, event_ticker=event_ticker)
         if legs is None:
             return None
 
         bid_prices = [price for _, price in legs]
         profit = arb_profit(bid_prices)
         if profit <= 0:
+            if sum(bid_prices) >= 0.97:
+                logger.debug("taker near-miss %s: bid_sum=%.4f", event_ticker, sum(bid_prices))
             return None
 
         profit_pct = (profit / 1.0) * 100
@@ -78,34 +80,47 @@ class ArbEngine:
         self,
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
+        event_ticker: str | None = None,
     ) -> list[tuple[str, float]] | None:
         legs: list[tuple[str, float]] = []
         for ticker, book in orderbooks.items():
             best_bid = book.best_yes_bid()
             if best_bid is None:
                 return None
-            if self.min_bid_depth > 1:
-                if book.yes_bid_depth_at(best_bid) < self.min_bid_depth:
-                    return None
             legs.append((ticker, best_bid))
+
+        bid_sum = sum(p for _, p in legs)
+        near_miss = bid_sum >= 0.97  # within striking distance of taker threshold
+
+        if self.min_bid_depth > 1:
+            for ticker, best_bid in legs:
+                if orderbooks[ticker].yes_bid_depth_at(best_bid) < self.min_bid_depth:
+                    if near_miss and event_ticker:
+                        logger.debug(
+                            "near-miss %s: bid_sum=%.4f blocked — %s depth < min %d",
+                            event_ticker, bid_sum, ticker, self.min_bid_depth,
+                        )
+                    return None
 
         if self.min_volume_24h > 0 and market_metadata:
             for ticker, _ in legs:
-                meta = market_metadata.get(ticker, {})
-                volume = meta.get("volume_24h", 0)
+                volume = market_metadata.get(ticker, {}).get("volume_24h", 0)
                 if volume < self.min_volume_24h:
+                    if near_miss and event_ticker:
+                        logger.debug(
+                            "near-miss %s: bid_sum=%.4f blocked — %s volume %.0f < min %.0f",
+                            event_ticker, bid_sum, ticker, volume, self.min_volume_24h,
+                        )
                     return None
 
         if self.min_open_interest > 0 and market_metadata:
             for ticker, _ in legs:
-                meta = market_metadata.get(ticker, {})
-                if meta.get("open_interest", 0) < self.min_open_interest:
+                if market_metadata.get(ticker, {}).get("open_interest", 0) < self.min_open_interest:
                     return None
 
         if self.min_liquidity > 0 and market_metadata:
             for ticker, _ in legs:
-                meta = market_metadata.get(ticker, {})
-                if meta.get("liquidity", 0) < self.min_liquidity:
+                if market_metadata.get(ticker, {}).get("liquidity", 0) < self.min_liquidity:
                     return None
 
         return legs
@@ -116,13 +131,15 @@ class ArbEngine:
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
     ) -> TradeSignal | None:
-        legs = self._validate_legs(orderbooks, market_metadata)
+        legs = self._validate_legs(orderbooks, market_metadata, event_ticker=event_ticker)
         if legs is None:
             return None
 
         bid_prices = [price for _, price in legs]
         profit = maker_arb_profit(bid_prices)
         if profit <= 0:
+            if sum(bid_prices) >= 0.95:
+                logger.debug("maker near-miss %s: bid_sum=%.4f", event_ticker, sum(bid_prices))
             return None
 
         profit_pct = (profit / 1.0) * 100
@@ -137,6 +154,10 @@ class ArbEngine:
         if days is None:
             return None
         if days > self.maker_max_horizon_hours / 24:
+            logger.debug(
+                "maker horizon-filtered %s: bid_sum=%.4f profit_pct=%.1f%% closes_in=%.1fh horizon=%.1fh",
+                event_ticker, sum(bid_prices), profit_pct, days * 24, self.maker_max_horizon_hours,
+            )
             return None
         if days > self.near_term_hours / 24:
             annualized = profit_pct * (365 / days)

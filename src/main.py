@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from src.auth import KalshiAuth
@@ -262,11 +263,29 @@ class ArbBot:
             realized_pnl = self.positions.realized_pnl
             cb_status = "TRIPPED" if self.executor.is_circuit_breaker_tripped() else "ok"
             maker_count = self.maker.active_event_count() if self.maker else 0
+
+            # Count events closing within maker horizon (maker strategy eligibility)
+            now = datetime.now(timezone.utc)
+            horizon_cutoff = now + timedelta(hours=self.engine.maker_max_horizon_hours)
+            maker_horizon_events = 0
+            for event_ticker in self.discovery.event_tickers:
+                for mt in self.orderbook_mgr._event_markets.get(event_ticker, []):
+                    close_str = self.discovery.market_metadata.get(mt, {}).get("close_time", "")
+                    if close_str:
+                        try:
+                            close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+                            if now < close_dt <= horizon_cutoff:
+                                maker_horizon_events += 1
+                                break
+                        except (ValueError, TypeError):
+                            pass
+
             logger.info(
                 "STATUS | uptime=%.0fs | events=%d | arbs_detected=%d | "
                 "arbs_executed=%d | arbs_failed=%d | theoretical_profit=$%.4f | "
                 "open_positions=%d | unrealized_premium=$%.4f | "
-                "realized_pnl=$%.4f | session_loss=$%.4f | circuit_breaker=%s | maker_events=%d",
+                "realized_pnl=$%.4f | session_loss=$%.4f | circuit_breaker=%s | "
+                "maker_events=%d | maker_horizon=%d",
                 uptime,
                 len(self.discovery.event_tickers),
                 self._stats["arbs_detected"],
@@ -279,6 +298,7 @@ class ArbBot:
                 self.executor.session_realized_loss,
                 cb_status,
                 maker_count,
+                maker_horizon_events,
             )
 
     async def _close_inherited_positions(self):
