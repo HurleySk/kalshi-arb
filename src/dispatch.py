@@ -114,11 +114,15 @@ class Dispatcher:
                         }))
                         return ne_signal
 
-        if not signal and self._monotone_registry:
+        if not signal and self._monotone_registry and not self.executor.is_executing():
             for family in self._monotone_registry.get_families().values():
                 for i in range(len(family) - 1):
                     lower = family[i]
                     upper = family[i + 1]
+                    # Only evaluate "above/exceed/over/reach" families — "below/under" semantics
+                    # invert the P(above threshold) monotone constraint and require separate handling.
+                    if lower.get("direction") not in ("above", "exceed", "over", "reach"):
+                        continue
                     lower_book = self.orderbook_mgr.get_orderbook(lower["market_ticker"])
                     upper_book = self.orderbook_mgr.get_orderbook(upper["market_ticker"])
                     if lower_book is None or upper_book is None:
@@ -128,6 +132,8 @@ class Dispatcher:
                         lower["market_ticker"], lower_book,
                     )
                     if mono_signal:
+                        if self.executor.is_event_blacklisted(mono_signal.event_ticker):
+                            continue
                         key = mono_signal.event_ticker + ":mono"
                         last = self._last_signal_time.get(key, 0)
                         if time.time() - last >= self._signal_cooldown:

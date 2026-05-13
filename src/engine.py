@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from src.fees import arb_profit, buy_side_arb_profit, exposure_ratio, maker_arb_profit, maker_exposure_ratio
+from src.fees import arb_profit, buy_side_arb_profit, exposure_ratio, maker_arb_profit, maker_exposure_ratio, monotone_pair_profit
 from src.models import Orderbook, TradeSignal
 from src.risk import RiskProfile
 
@@ -189,7 +189,6 @@ class ArbEngine:
         lower_ticker: str,
         lower_book: Orderbook,
     ) -> TradeSignal | None:
-        from src.fees import monotone_pair_profit
         upper_bid = upper_book.best_yes_bid()
         lower_ask = lower_book.best_yes_ask()
         if upper_bid is None or lower_ask is None:

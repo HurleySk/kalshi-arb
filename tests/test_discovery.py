@@ -103,3 +103,36 @@ def test_cleanup_removes_expired():
     assert "E_ACT" not in removed
     assert "M_EXP" not in discovery.market_metadata
     assert "M_ACT" in discovery.market_metadata
+
+
+def test_cleanup_removes_monotone_registry_entries():
+    discovery, _ = _make_discovery()
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    m1 = Market(ticker="M1", event_ticker="E1", title="Exp", status="active", close_time=past)
+    m2 = Market(ticker="M2", event_ticker="E2", title="Exp", status="active", close_time=past)
+    discovery.register_events([
+        Event(event_ticker="E1", title="Will S&P close above 5,000?", series_ticker="", mutually_exclusive=True, markets=[m1]),
+        Event(event_ticker="E2", title="Will S&P close above 5,100?", series_ticker="", mutually_exclusive=True, markets=[m2]),
+    ])
+    assert len(discovery.monotone_registry.get_families()) == 1
+
+    discovery.cleanup_expired()
+    assert len(discovery.monotone_registry.get_families()) == 0
+
+
+def test_repoll_does_not_duplicate_monotone_registry():
+    """Re-registering the same event on re-poll must not add duplicate family members."""
+    discovery, _ = _make_discovery()
+    m1 = Market(ticker="M1", event_ticker="E1", title="Test", status="active")
+    m2 = Market(ticker="M2", event_ticker="E2", title="Test", status="active")
+    event1 = Event(event_ticker="E1", title="Will S&P close above 5,000?", series_ticker="", mutually_exclusive=True, markets=[m1])
+    event2 = Event(event_ticker="E2", title="Will S&P close above 5,100?", series_ticker="", mutually_exclusive=True, markets=[m2])
+
+    discovery.register_events([event1, event2])
+    discovery.register_events([event1, event2])  # simulate re-poll
+
+    families = discovery.monotone_registry.get_families()
+    assert len(families) == 1
+    members = list(families.values())[0]
+    assert len(members) == 2  # not 4

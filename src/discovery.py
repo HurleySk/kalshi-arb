@@ -65,6 +65,8 @@ class EventDiscovery:
                 market_tickers = event.market_tickers()
                 self.orderbook_mgr.register_event(event.event_ticker, market_tickers)
                 new_tickers.extend(market_tickers)
+                for m in event.markets:
+                    self.monotone_registry.try_register(event.event_ticker, m.ticker, event.title)
             for m in event.markets:
                 self.market_metadata[m.ticker] = {
                     "close_time": m.close_time,
@@ -73,7 +75,6 @@ class EventDiscovery:
                     "open_interest": m.open_interest,
                     "liquidity": m.liquidity,
                 }
-                self.monotone_registry.try_register(event.event_ticker, m.ticker, event.title)
         return new_tickers
 
     def cleanup_expired(self) -> set[str]:

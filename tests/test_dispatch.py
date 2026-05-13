@@ -216,3 +216,73 @@ def test_dispatcher_routes_buy_side_signal():
     signal = dispatcher.process_orderbook_update("M1")
     assert signal is not None
     assert signal.signal_type == "buy_side_taker"
+
+
+def test_dispatcher_routes_monotone_signal():
+    """Dispatcher returns a monotone signal when evaluate_monotone_pair fires on an adjacent pair."""
+    from unittest.mock import MagicMock
+    from src.models import TradeSignal, Orderbook
+    from src.discovery import MonotoneFamilyRegistry
+
+    mono_signal = TradeSignal(
+        event_ticker="M_upper|M_lower", legs=[("M_upper", 0.65), ("M_lower", 0.45)],
+        net_profit=0.05, profit_pct=5.0, exposure_ratio=0.0, signal_type="monotone",
+        quantity=1, leg_actions=["sell", "buy"],
+    )
+    engine = MagicMock()
+    engine.evaluate.return_value = None
+    engine.evaluate_buy_side.return_value = None
+    engine.evaluate_monotone_pair.return_value = mono_signal
+    executor = MagicMock()
+    executor.is_circuit_breaker_tripped.return_value = False
+    executor.is_executing.return_value = False
+    executor.is_event_blacklisted.return_value = False
+
+    upper_book = Orderbook(yes_bids={65: 100}, no_bids={})
+    lower_book = Orderbook(yes_bids={}, no_bids={55: 100})
+    ob_mgr = MagicMock()
+    ob_mgr.get_event_for_market.return_value = "E_upper"
+    ob_mgr.get_event_orderbooks.return_value = {"M_upper": upper_book}
+    ob_mgr.get_orderbook.side_effect = lambda t: upper_book if t == "M_upper" else lower_book
+
+    registry = MonotoneFamilyRegistry()
+    registry.try_register("E_upper", "M_upper", "Will S&P close above 5,100?")
+    registry.try_register("E_lower", "M_lower", "Will S&P close above 5,000?")
+
+    dispatcher = Dispatcher(engine=engine, executor=executor, maker=None,
+                            orderbook_mgr=ob_mgr, market_metadata={},
+                            monotone_registry=registry)
+    signal = dispatcher.process_orderbook_update("M_upper")
+    assert signal is not None
+    assert signal.signal_type == "monotone"
+    assert signal.leg_actions == ["sell", "buy"]
+
+
+def test_dispatcher_monotone_skips_below_direction():
+    """below/under families must be skipped — direction semantics are inverted."""
+    from unittest.mock import MagicMock
+    from src.models import TradeSignal, Orderbook
+    from src.discovery import MonotoneFamilyRegistry
+
+    engine = MagicMock()
+    engine.evaluate.return_value = None
+    engine.evaluate_buy_side.return_value = None
+    executor = MagicMock()
+    executor.is_circuit_breaker_tripped.return_value = False
+    executor.is_executing.return_value = False
+    executor.is_event_blacklisted.return_value = False
+    ob_mgr = MagicMock()
+    ob_mgr.get_event_for_market.return_value = "E1"
+    ob_mgr.get_event_orderbooks.return_value = {}
+    ob_mgr.get_orderbook.return_value = Orderbook(yes_bids={65: 100}, no_bids={55: 100})
+
+    registry = MonotoneFamilyRegistry()
+    registry.try_register("E1", "M1", "Will S&P close below 5,000?")
+    registry.try_register("E2", "M2", "Will S&P close below 5,100?")
+
+    dispatcher = Dispatcher(engine=engine, executor=executor, maker=None,
+                            orderbook_mgr=ob_mgr, market_metadata={},
+                            monotone_registry=registry)
+    signal = dispatcher.process_orderbook_update("M1")
+    assert signal is None
+    engine.evaluate_monotone_pair.assert_not_called()

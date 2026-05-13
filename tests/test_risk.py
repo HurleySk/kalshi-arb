@@ -77,6 +77,14 @@ def test_conservative_two_sided_fields():
     assert profile.two_sided_min_volume_24h == 50.0
 
 
+def test_moderate_two_sided_fields():
+    profile = load_risk_profile("moderate", {})
+    assert profile.two_sided_min_spread_cents == 4
+    assert profile.two_sided_max_inventory == 25
+    assert profile.two_sided_timeout_secs == 180
+    assert profile.two_sided_min_volume_24h == 10.0
+
+
 def test_aggressive_two_sided_fields():
     profile = load_risk_profile("aggressive", {})
     assert profile.two_sided_min_spread_cents == 2
