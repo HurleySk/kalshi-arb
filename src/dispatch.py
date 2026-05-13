@@ -81,6 +81,7 @@ class Dispatcher:
                     if time.time() - last >= self._signal_cooldown:
                         self._last_signal_time[key] = time.time()
                         self._pending_execution.add(key)
+                        self._pending_execution.add(event_ticker)  # block all variants
                         logger.info(
                             json.dumps({
                                 "event": "buy_side_arb_detected",
@@ -101,6 +102,7 @@ class Dispatcher:
                     if time.time() - last >= self._signal_cooldown:
                         self._last_signal_time[key] = time.time()
                         self._pending_execution.add(key)
+                        self._pending_execution.add(event_ticker)  # block all variants
                         logger.info(json.dumps({
                             "event": "near_expiry_arb_detected",
                             "event_ticker": event_ticker,
