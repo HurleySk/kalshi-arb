@@ -295,7 +295,7 @@ class ArbEngine:
         # have only a partial subset of the event's markets — not a real arb.
         if ask_sum < 0.60:
             logger.debug(
-                "buy-side coverage-filtered %s: ask_sum=%.4f — likely missing outcome legs",
+                "buy-side coverage-filtered %s: ask_sum=%.4f (threshold 0.60) — ask sum too low, possible incomplete outcome registration",
                 event_ticker, ask_sum,
             )
             return None

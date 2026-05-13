@@ -492,7 +492,7 @@ def test_evaluate_buy_side_rejects_zero_ask():
 
 
 def test_evaluate_buy_side_rejects_incomplete_coverage():
-    # All four legs at 1¢ ask → sum=4¢ — only a partial subset of event outcomes
+    # Three legs at 1¢ ask + one at 3¢ → sum=6¢ — only a partial subset of event outcomes
     engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
     orderbooks = {
         "M1": Orderbook(yes_bids={}, no_bids={99: 100}),  # YES ask = 1¢
