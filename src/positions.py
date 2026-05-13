@@ -15,10 +15,23 @@ class TrackedPosition:
 class PositionTracker:
     def __init__(self):
         self._positions: dict[str, TrackedPosition] = {}
+        self.realized_pnl: float = 0.0
 
     def record_fill(self, ticker: str, side: str, price: float, quantity: float, action: str):
         if quantity <= 0:
             return
+
+        if action == "buy" and ticker in self._positions:
+            pos = self._positions[ticker]
+            closed_qty = min(quantity, pos.quantity)
+            pnl = (pos.avg_price - price) * closed_qty
+            self.realized_pnl += pnl
+            pos.quantity -= closed_qty
+            if pos.quantity <= 0:
+                del self._positions[ticker]
+            logger.info("Close: buy %dx %s @ %.4f (realized: $%.4f)", quantity, ticker, price, pnl)
+            return
+
         if ticker in self._positions:
             pos = self._positions[ticker]
             total_cost = pos.avg_price * pos.quantity + price * quantity
@@ -31,7 +44,7 @@ class PositionTracker:
                 quantity=quantity,
                 avg_price=price,
             )
-        logger.info(f"Fill: {action} {quantity}x {ticker} @ {price:.4f}")
+        logger.info("Fill: %s %dx %s @ %.4f", action, quantity, ticker, price)
 
     def get_position(self, ticker: str) -> TrackedPosition | None:
         return self._positions.get(ticker)
