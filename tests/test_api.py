@@ -126,6 +126,17 @@ def test_build_sell_order():
     assert order["count"] == 10
 
 
+def test_build_buy_order():
+    api = _make_api()
+    order = api.build_buy_order(ticker="M1", yes_price=0.55, quantity=10)
+    assert order["ticker"] == "M1"
+    assert order["action"] == "buy"
+    assert order["side"] == "yes"
+    assert order["type"] == "limit"
+    assert order["yes_price"] == 55
+    assert order["count"] == 10
+
+
 def test_retry_on_502():
     """502 errors should be retried, not raised immediately."""
     api = _make_api()

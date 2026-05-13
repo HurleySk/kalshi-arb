@@ -107,7 +107,6 @@ def test_near_expiry_signal_suppressed_when_market_already_expired():
     ob_mgr = MagicMock()
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock()}
-    ob_mgr._event_markets = {"E1": ["M1"]}
     ob_mgr.get_event_markets.return_value = ["M1"]
 
     already_closed = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -142,7 +141,6 @@ def test_near_expiry_cooldown_prevents_second_signal():
     ob_mgr = MagicMock()
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock()}
-    ob_mgr._event_markets = {"E1": ["M1"]}
     ob_mgr.get_event_markets.return_value = ["M1"]
 
     close_soon = (datetime.now(timezone.utc) + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -179,7 +177,6 @@ def test_dispatcher_routes_near_expiry_signal():
     ob_mgr = MagicMock()
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock()}
-    ob_mgr._event_markets = {"E1": ["M1"]}
     ob_mgr.get_event_markets.return_value = ["M1"]
 
     close_soon = (datetime.now(timezone.utc) + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")

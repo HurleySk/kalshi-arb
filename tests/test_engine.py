@@ -432,6 +432,18 @@ def test_near_expiry_fires_when_normal_evaluate_would_fail_filters():
     assert signal.signal_type == "near_expiry_taker"
 
 
+def test_near_expiry_relaxes_min_bid_depth():
+    """near_expiry_min_bid_depth=1 accepts thin books that min_bid_depth=5 would reject."""
+    engine = _make_engine_near_expiry(near_expiry_min_bid_depth=1)
+    # Depth=2 at best bid — below conservative min_bid_depth=5, but above near_expiry threshold=1
+    orderbooks = {"M1": _ob([(0.40, 2)]), "M2": _ob([(0.35, 2)]), "M3": _ob([(0.35, 2)])}
+    meta = {t: {"volume_24h": 0} for t in ["M1", "M2", "M3"]}
+    assert engine.evaluate("E1", orderbooks, market_metadata=meta) is None
+    signal = engine.evaluate_near_expiry("E1", orderbooks, market_metadata=meta)
+    assert signal is not None
+    assert signal.signal_type == "near_expiry_taker"
+
+
 def test_near_expiry_uses_near_expiry_min_profit_pct():
     """Signal rejected if below near_expiry_min_profit_pct."""
     engine = _make_engine_near_expiry(near_expiry_min_profit_pct=50.0)

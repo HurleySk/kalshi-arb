@@ -290,7 +290,7 @@ class ArbBot:
             horizon_cutoff = now + timedelta(hours=self.engine.maker_max_horizon_hours)
             maker_horizon_events = 0
             for event_ticker in self.discovery.event_tickers:
-                for mt in self.orderbook_mgr._event_markets.get(event_ticker, []):
+                for mt in self.orderbook_mgr.get_event_markets(event_ticker):
                     close_str = self.discovery.market_metadata.get(mt, {}).get("close_time", "")
                     if close_str:
                         try:
