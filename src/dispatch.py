@@ -38,6 +38,7 @@ class Dispatcher:
         self._last_signal_time: dict[str, float] = {}
         self._pending_execution: set[str] = set()
         self._maker_dirty_events: set[str] = set()
+        self._market_expiry_cache: dict[str, datetime] = {}
 
     def process_orderbook_update(self, market_ticker: str) -> TradeSignal | None:
         """Evaluate one orderbook update. Returns a TradeSignal to execute, or None."""
@@ -164,14 +165,18 @@ class Dispatcher:
         now = datetime.now(timezone.utc)
         cutoff = now + timedelta(minutes=self._near_expiry_window_minutes)
         for mt in self.orderbook_mgr._event_markets.get(event_ticker, []):
-            close_str = self.market_metadata.get(mt, {}).get("close_time", "")
-            if close_str:
+            close_dt = self._market_expiry_cache.get(mt)
+            if close_dt is None:
+                close_str = self.market_metadata.get(mt, {}).get("close_time", "")
+                if not close_str:
+                    continue
                 try:
                     close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
-                    if now < close_dt <= cutoff:
-                        return True
+                    self._market_expiry_cache[mt] = close_dt
                 except (ValueError, TypeError):
-                    pass
+                    continue
+            if now < close_dt <= cutoff:
+                return True
         return False
 
     def mark_execution_complete(self, event_ticker: str):

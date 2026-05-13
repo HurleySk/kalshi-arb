@@ -95,3 +95,24 @@ def test_min_buy_side_coverage_preset_values():
     assert load_risk_profile("conservative", {}).min_buy_side_coverage == 0.90
     assert load_risk_profile("moderate", {}).min_buy_side_coverage == 0.88
     assert load_risk_profile("aggressive", {}).min_buy_side_coverage == 0.85
+
+
+def test_bool_override_with_string_false():
+    """bool("false") == True in Python — config strings must be parsed correctly."""
+    profile = load_risk_profile("conservative", {"require_recent_trades": "false"})
+    assert profile.require_recent_trades is False
+
+
+def test_bool_override_with_string_true():
+    profile = load_risk_profile("aggressive", {"require_recent_trades": "true"})
+    assert profile.require_recent_trades is True
+
+
+def test_bool_override_with_native_bool():
+    profile = load_risk_profile("conservative", {"require_recent_trades": False})
+    assert profile.require_recent_trades is False
+
+
+def test_bool_override_unknown_key_ignored():
+    profile = load_risk_profile("conservative", {"nonexistent_key": True})
+    assert profile.min_volume_24h == 50.0

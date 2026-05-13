@@ -90,6 +90,8 @@ class ArbEngine:
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
         event_ticker: str | None = None,
+        min_bid_depth: int | None = None,
+        min_volume_24h: float | None = None,
     ) -> list[tuple[str, float, float]] | None:
         legs: list[tuple[str, float, float]] = []
         for ticker, book in orderbooks.items():
@@ -102,24 +104,26 @@ class ArbEngine:
         bid_sum = sum(p for _, p, _ in legs)
         near_miss = bid_sum >= 0.97  # within striking distance of taker threshold
 
-        if self.min_bid_depth > 1:
+        effective_min_depth = min_bid_depth if min_bid_depth is not None else self.min_bid_depth
+        if effective_min_depth > 1:
             for ticker, best_bid, depth in legs:
-                if depth < self.min_bid_depth:
+                if depth < effective_min_depth:
                     if near_miss and event_ticker:
                         logger.debug(
                             "near-miss %s: bid_sum=%.4f blocked — %s depth < min %d",
-                            event_ticker, bid_sum, ticker, self.min_bid_depth,
+                            event_ticker, bid_sum, ticker, effective_min_depth,
                         )
                     return None
 
-        if self.min_volume_24h > 0 and market_metadata:
+        effective_min_volume = min_volume_24h if min_volume_24h is not None else self.min_volume_24h
+        if effective_min_volume > 0 and market_metadata:
             for ticker, _, _ in legs:
                 volume = market_metadata.get(ticker, {}).get("volume_24h", 0)
-                if volume < self.min_volume_24h:
+                if volume < effective_min_volume:
                     if near_miss and event_ticker:
                         logger.debug(
                             "near-miss %s: bid_sum=%.4f blocked — %s volume %.0f < min %.0f",
-                            event_ticker, bid_sum, ticker, volume, self.min_volume_24h,
+                            event_ticker, bid_sum, ticker, volume, effective_min_volume,
                         )
                     return None
 
@@ -225,35 +229,15 @@ class ArbEngine:
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
     ) -> TradeSignal | None:
-        legs: list[tuple[str, float]] = []
-        for ticker, book in orderbooks.items():
-            best_bid = book.best_yes_bid()
-            if best_bid is None:
-                return None
-            legs.append((ticker, best_bid))
+        legs = self._validate_legs(
+            orderbooks, market_metadata, event_ticker=event_ticker,
+            min_bid_depth=self.near_expiry_min_bid_depth,
+            min_volume_24h=self.near_expiry_min_volume_24h,
+        )
+        if legs is None:
+            return None
 
-        bid_prices = [price for _, price in legs]
-
-        if self.near_expiry_min_bid_depth > 1:
-            for ticker, best_bid in legs:
-                if orderbooks[ticker].yes_bid_depth_at(best_bid) < self.near_expiry_min_bid_depth:
-                    return None
-
-        if self.near_expiry_min_volume_24h > 0 and market_metadata:
-            for ticker, _ in legs:
-                if market_metadata.get(ticker, {}).get("volume_24h", 0) < self.near_expiry_min_volume_24h:
-                    return None
-
-        if self.min_open_interest > 0 and market_metadata:
-            for ticker, _ in legs:
-                if market_metadata.get(ticker, {}).get("open_interest", 0) < self.min_open_interest:
-                    return None
-
-        if self.min_liquidity > 0 and market_metadata:
-            for ticker, _ in legs:
-                if market_metadata.get(ticker, {}).get("liquidity", 0) < self.min_liquidity:
-                    return None
-
+        bid_prices = [price for _, price, _ in legs]
         profit = arb_profit(bid_prices)
         if profit <= 0:
             return None
@@ -266,12 +250,12 @@ class ArbEngine:
         if exp_ratio > self.max_exposure_ratio:
             return None
 
-        depths = [orderbooks[ticker].yes_bid_depth_at(price) for ticker, price in legs]
+        depths = [d for _, _, d in legs]
         quantity = max(1, min(int(min(depths)), self.max_contracts_per_arb))
 
         return TradeSignal(
             event_ticker=event_ticker,
-            legs=legs,
+            legs=[(t, p) for t, p, _ in legs],
             net_profit=profit,
             profit_pct=profit_pct,
             exposure_ratio=exp_ratio,

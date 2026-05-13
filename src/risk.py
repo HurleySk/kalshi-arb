@@ -106,6 +106,10 @@ def load_risk_profile(mode: str, overrides: dict) -> RiskProfile:
         raise ValueError(f"Invalid risk_mode: {mode!r}. Must be one of {list(PRESETS.keys())}")
     values = {**PRESETS[mode]}
     for key, val in overrides.items():
-        if key in values:
+        if key not in values:
+            continue
+        if isinstance(values[key], bool):
+            values[key] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
+        else:
             values[key] = type(values[key])(val)
     return RiskProfile(**values)
