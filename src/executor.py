@@ -63,6 +63,21 @@ class ExecutionManager:
             logger.warning("Already executing, skipping signal for %s", signal.event_ticker)
             return
 
+        # Pre-flight: for buy-side arbs, verify we have enough cash before hitting the exchange
+        if signal.leg_actions and all(a == "buy" for a in signal.leg_actions):
+            required = sum(price for _, price in signal.legs) * quantity
+            try:
+                bal = await self.api.get_balance()
+                available = bal.get("balance", 0) / 100.0
+                if available < required:
+                    logger.warning(
+                        "Skipping %s: insufficient balance (need $%.2f, have $%.2f)",
+                        signal.event_ticker, required, available,
+                    )
+                    return
+            except Exception:
+                logger.exception("Balance pre-check failed for %s — proceeding anyway", signal.event_ticker)
+
         self._executing = True
         try:
             orders = self.build_orders(signal, quantity)

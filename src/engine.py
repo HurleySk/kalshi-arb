@@ -28,6 +28,7 @@ class ArbEngine:
         self.two_sided_min_spread_cents = risk_profile.two_sided_min_spread_cents
         self.two_sided_max_inventory = risk_profile.two_sided_max_inventory
         self.two_sided_min_volume_24h = risk_profile.two_sided_min_volume_24h
+        self.buy_side_max_horizon_hours = risk_profile.buy_side_max_horizon_hours
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -299,6 +300,22 @@ class ArbEngine:
                 event_ticker, ask_sum,
             )
             return None
+
+        if self.buy_side_max_horizon_hours > 0 and market_metadata and legs:
+            first_ticker = legs[0][0]
+            close_str = market_metadata.get(first_ticker, {}).get("close_time", "")
+            if close_str:
+                try:
+                    close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+                    hours_to_close = (close_dt - datetime.now(timezone.utc)).total_seconds() / 3600
+                    if hours_to_close > self.buy_side_max_horizon_hours:
+                        logger.debug(
+                            "buy-side horizon-filtered %s: closes_in=%.1fh limit=%.1fh",
+                            event_ticker, hours_to_close, self.buy_side_max_horizon_hours,
+                        )
+                        return None
+                except (ValueError, TypeError):
+                    pass
 
         if self.min_bid_depth > 1:
             for ticker, ask_price in legs:
