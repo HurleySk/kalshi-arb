@@ -96,3 +96,9 @@ class TradeSignal:
     signal_type: str = "taker"
     quantity: int = 1
     leg_actions: list[str] | None = None  # None means all legs are "sell"
+
+    def __post_init__(self):
+        if self.leg_actions is not None and len(self.leg_actions) != len(self.legs):
+            raise ValueError(
+                f"leg_actions length {len(self.leg_actions)} must match legs length {len(self.legs)}"
+            )

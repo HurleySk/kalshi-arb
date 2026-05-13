@@ -167,6 +167,22 @@ def test_unwind_places_buy_order():
     assert unwind_orders[0]["ticker"] == "M2"
 
 
+def test_build_orders_defaults_to_sell_when_no_leg_actions():
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.40), ("M2", 0.35)],
+        net_profit=0.05, profit_pct=5.0, exposure_ratio=1.5,
+    )
+    api = MagicMock()
+    api.build_sell_order.return_value = {"action": "sell"}
+    executor = ExecutionManager(api=api, positions=MagicMock(),
+                                fill_timeout_secs=10,
+                                risk_profile=load_risk_profile("aggressive", {}))
+    orders = executor.build_orders(signal, quantity=1)
+    assert api.build_sell_order.call_count == 2
+    assert not hasattr(api.build_buy_order, 'called') or api.build_buy_order.call_count == 0
+
+
 def test_build_orders_buy_when_leg_action_is_buy():
     signal = TradeSignal(
         event_ticker="E1",

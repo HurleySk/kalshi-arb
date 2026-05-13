@@ -1,5 +1,5 @@
 import math
-from src.fees import taker_fee, arb_profit, exposure_ratio, maker_arb_profit, TAKER_FEE_RATE
+from src.fees import taker_fee, arb_profit, exposure_ratio, maker_arb_profit, buy_side_arb_profit, TAKER_FEE_RATE
 
 
 def test_taker_fee_at_50_cents():
@@ -74,9 +74,6 @@ def test_maker_arb_profit_below_dollar():
 def test_maker_arb_profit_three_legs():
     profit = maker_arb_profit([0.40, 0.35, 0.35])
     assert abs(profit - 0.10) < 1e-9
-
-
-from src.fees import buy_side_arb_profit
 
 
 def test_buy_side_profit_positive_when_sum_below_one():
