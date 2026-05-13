@@ -85,3 +85,4 @@ class TradeSignal:
     profit_pct: float
     exposure_ratio: float
     signal_type: str = "taker"
+    quantity: int = 1

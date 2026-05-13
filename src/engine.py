@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 class ArbEngine:
-    def __init__(self, risk_profile: RiskProfile, maker_max_horizon_hours: float = 2.0):
+    def __init__(self, risk_profile: RiskProfile, maker_max_horizon_hours: float = 2.0,
+                 max_contracts_per_arb: int = 1):
         self.min_profit_pct = risk_profile.min_profit_pct
         self.max_exposure_ratio = risk_profile.max_exposure_ratio
         self.near_term_hours = risk_profile.near_term_hours
@@ -18,6 +19,7 @@ class ArbEngine:
         self.min_volume_24h = risk_profile.min_volume_24h
         self.maker_max_exposure_ratio = 50.0
         self.maker_max_horizon_hours = maker_max_horizon_hours
+        self.max_contracts_per_arb = max_contracts_per_arb
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -58,12 +60,16 @@ class ArbEngine:
         if exp_ratio > self.max_exposure_ratio:
             return None
 
+        depths = [orderbooks[ticker].yes_bid_depth_at(price) for ticker, price in legs]
+        quantity = max(1, min(int(min(depths)), self.max_contracts_per_arb))
+
         return TradeSignal(
             event_ticker=event_ticker,
             legs=legs,
             net_profit=profit,
             profit_pct=profit_pct,
             exposure_ratio=exp_ratio,
+            quantity=quantity,
         )
 
     def _validate_legs(

@@ -212,3 +212,102 @@ def test_evaluate_maker_accepts_moderate_exposure():
     signal = engine.evaluate_maker("E1", orderbooks, market_metadata=_near_meta("M1", "M2"))
     assert signal is not None
     assert signal.signal_type == "maker"
+
+
+def test_evaluate_maker_custom_horizon_accepts_within():
+    """With maker_max_horizon_hours=12, events closing in 6h should be accepted."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, maker_max_horizon_hours=12.0)
+    meta = {t: {"close_time": _future_iso(6 / 24), "volume_24h": 500} for t in ["M1", "M2", "M3"]}
+    orderbooks = {"M1": _ob([(0.35, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    signal = engine.evaluate_maker("E1", orderbooks, market_metadata=meta)
+    assert signal is not None
+    assert signal.signal_type == "maker"
+
+
+def test_evaluate_maker_custom_horizon_rejects_beyond():
+    """With maker_max_horizon_hours=4, events closing in 6h should be rejected."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, maker_max_horizon_hours=4.0)
+    meta = {t: {"close_time": _future_iso(6 / 24), "volume_24h": 500} for t in ["M1", "M2", "M3"]}
+    orderbooks = {"M1": _ob([(0.35, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    assert engine.evaluate_maker("E1", orderbooks, market_metadata=meta) is None
+
+
+def test_taker_ignores_horizon_no_metadata():
+    """Taker path works fine even without metadata (no horizon logic at all)."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    signal = engine.evaluate("E1", _wide_orderbooks())
+    assert signal is not None
+
+
+def test_evaluate_maker_hurdle_rate_rejects_low_annualized():
+    """Event within horizon but beyond near_term_hours must beat hurdle rate.
+
+    near_term_hours=1 (so 12h out is 'long-dated'), hurdle_rate=1000%.
+    3 legs at 0.35 = sum 1.05, profit=5%, days=0.5 -> annualized=5%*365/0.5=3650%.
+    But with hurdle at 5000% it should be rejected.
+    """
+    engine = _make_engine(
+        min_profit_pct=1.0,
+        max_exposure_ratio=10.0,
+        maker_max_horizon_hours=24.0,
+        near_term_hours=1,
+        hurdle_rate_annual_pct=5000.0,
+    )
+    meta = {t: {"close_time": _future_iso(0.5), "volume_24h": 500} for t in ["M1", "M2", "M3"]}
+    orderbooks = {"M1": _ob([(0.35, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    assert engine.evaluate_maker("E1", orderbooks, market_metadata=meta) is None
+
+
+def test_evaluate_maker_hurdle_rate_accepts_high_annualized():
+    """Same setup but with a beatable hurdle rate."""
+    engine = _make_engine(
+        min_profit_pct=1.0,
+        max_exposure_ratio=10.0,
+        maker_max_horizon_hours=24.0,
+        near_term_hours=1,
+        hurdle_rate_annual_pct=100.0,
+    )
+    meta = {t: {"close_time": _future_iso(0.5), "volume_24h": 500} for t in ["M1", "M2", "M3"]}
+    orderbooks = {"M1": _ob([(0.35, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    signal = engine.evaluate_maker("E1", orderbooks, market_metadata=meta)
+    assert signal is not None
+
+
+def test_signal_includes_quantity_from_depth():
+    """Signal quantity should be min depth across legs, capped by max_contracts_per_arb."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    engine.max_contracts_per_arb = 5
+    orderbooks = {
+        "M1": _ob([(0.40, 10)]),
+        "M2": _ob([(0.35, 3)]),
+        "M3": _ob([(0.35, 8)]),
+    }
+    signal = engine.evaluate("E1", orderbooks)
+    assert signal is not None
+    assert signal.quantity == 3  # min(10, 3, 8) = 3, capped at 5 → 3
+
+
+def test_signal_quantity_capped_by_max():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    engine.max_contracts_per_arb = 2
+    orderbooks = {
+        "M1": _ob([(0.40, 100)]),
+        "M2": _ob([(0.35, 100)]),
+        "M3": _ob([(0.35, 100)]),
+    }
+    signal = engine.evaluate("E1", orderbooks)
+    assert signal is not None
+    assert signal.quantity == 2
+
+
+def test_signal_quantity_defaults_to_one():
+    """Without max_contracts_per_arb set, quantity defaults to 1."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": _ob([(0.40, 100)]),
+        "M2": _ob([(0.35, 100)]),
+        "M3": _ob([(0.35, 100)]),
+    }
+    signal = engine.evaluate("E1", orderbooks)
+    assert signal is not None
+    assert signal.quantity == 1

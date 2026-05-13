@@ -31,6 +31,7 @@ class Config:
     maker_fill_mode: str
     max_maker_events: int
     maker_max_horizon_hours: float
+    max_contracts_per_arb: int
     log_level: str
     log_file: str
 
@@ -84,6 +85,7 @@ def load_config(path: str) -> Config:
         maker_fill_mode=strategy.get("maker_fill_mode", "cancel_and_take"),
         max_maker_events=int(strategy.get("max_maker_events", 3)),
         maker_max_horizon_hours=float(strategy.get("maker_max_horizon_hours", 2.0)),
+        max_contracts_per_arb=int(strategy.get("max_contracts_per_arb", 1)),
         log_level=logging_cfg.get("level", "INFO"),
         log_file=logging_cfg.get("file", "logs/arb_bot.log"),
     )

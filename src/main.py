@@ -36,6 +36,7 @@ class ArbBot:
         self.engine = ArbEngine(
             risk_profile=self.risk_profile,
             maker_max_horizon_hours=self.cfg.maker_max_horizon_hours,
+            max_contracts_per_arb=self.cfg.max_contracts_per_arb,
         )
         self.positions = PositionTracker()
         self.executor = ExecutionManager(
@@ -213,7 +214,7 @@ class ArbBot:
             if not await self._validate_recent_trades(tickers):
                 logger.info("Recent trades check failed for %s, skipping", signal.event_ticker)
                 return
-            await self.executor.execute(signal)
+            await self.executor.execute(signal, quantity=signal.quantity)
             self._stats["arbs_executed"] += 1
             if self.executor.is_circuit_breaker_tripped():
                 await self._emergency_shutdown()

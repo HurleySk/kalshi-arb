@@ -24,6 +24,7 @@ def _make_bot():
         cfg.maker_fill_mode = "cancel_and_take"
         cfg.max_maker_events = 3
         cfg.maker_max_horizon_hours = 2.0
+        cfg.max_contracts_per_arb = 1
         cfg.log_level = "INFO"
         cfg.log_file = "/dev/null"
         mock_cfg.return_value = cfg
