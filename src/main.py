@@ -63,6 +63,7 @@ class ArbBot:
         self._market_metadata: dict[str, dict] = {}
         self._last_signal_time: dict[str, float] = {}
         self._signal_cooldown = 60.0
+        self._pending_execution: set[str] = set()
         self._maker_queue: asyncio.Queue | None = None
         self._maker_dirty_events: set[str] = set()
         self._stats = {
@@ -120,6 +121,9 @@ class ArbBot:
         if self.executor.is_circuit_breaker_tripped():
             return
 
+        if event_ticker in self._pending_execution:
+            return
+
         event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
         meta = {t: self._market_metadata.get(t, {}) for t in event_books}
 
@@ -147,6 +151,7 @@ class ArbBot:
                     "exposure_ratio": round(signal.exposure_ratio, 2),
                 })
             )
+            self._pending_execution.add(event_ticker)
             asyncio.create_task(self._execute_and_track(signal))
             return
 
@@ -233,6 +238,8 @@ class ArbBot:
         except Exception:
             logger.exception("Failed to execute arb for %s", signal.event_ticker)
             self._stats["arbs_failed"] += 1
+        finally:
+            self._pending_execution.discard(signal.event_ticker)
 
     async def _emergency_shutdown(self):
         logger.critical(
