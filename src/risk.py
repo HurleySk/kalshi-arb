@@ -15,6 +15,7 @@ class RiskProfile:
     unwind_price_step_cents: int
     min_open_interest: float = 0.0
     min_liquidity: float = 0.0
+    enable_buy_side_arb: bool = True
 
 
 PRESETS: dict[str, dict] = {

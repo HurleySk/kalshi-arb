@@ -19,6 +19,7 @@ class Dispatcher:
         orderbook_mgr: OrderbookManager,
         market_metadata: dict[str, dict],
         signal_cooldown: float = 60.0,
+        enable_buy_side_arb: bool = True,
     ):
         self.engine = engine
         self.executor = executor
@@ -26,6 +27,7 @@ class Dispatcher:
         self.orderbook_mgr = orderbook_mgr
         self.market_metadata = market_metadata
         self._signal_cooldown = signal_cooldown
+        self._enable_buy_side_arb = enable_buy_side_arb
         self._last_signal_time: dict[str, float] = {}
         self._pending_execution: set[str] = set()
         self._maker_dirty_events: set[str] = set()
@@ -67,6 +69,25 @@ class Dispatcher:
             )
             return signal
 
+        if not signal and self._enable_buy_side_arb:
+            buy_signal = self.engine.evaluate_buy_side(event_ticker, event_books, market_metadata=meta)
+            if buy_signal and not self.executor.is_executing():
+                if not self.executor.is_event_blacklisted(event_ticker):
+                    key = event_ticker + ":buy"
+                    last = self._last_signal_time.get(key, 0)
+                    if time.time() - last >= self._signal_cooldown:
+                        self._last_signal_time[key] = time.time()
+                        self._pending_execution.add(key)
+                        logger.info(
+                            json.dumps({
+                                "event": "buy_side_arb_detected",
+                                "event_ticker": event_ticker,
+                                "legs": buy_signal.legs,
+                                "net_profit": round(buy_signal.net_profit, 6),
+                            })
+                        )
+                        return buy_signal
+
         if self.maker and not signal:
             self._maker_dirty_events.add(event_ticker)
 
@@ -74,6 +95,7 @@ class Dispatcher:
 
     def mark_execution_complete(self, event_ticker: str):
         self._pending_execution.discard(event_ticker)
+        self._pending_execution.discard(event_ticker + ":buy")
 
     def consume_dirty_events(self) -> list[str]:
         dirty = list(self._maker_dirty_events)

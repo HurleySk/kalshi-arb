@@ -72,6 +72,7 @@ class ArbBot:
             maker=self.maker,
             orderbook_mgr=self.orderbook_mgr,
             market_metadata=self.discovery.market_metadata,
+            enable_buy_side_arb=self.risk_profile.enable_buy_side_arb,
         )
         self._ob_update_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10000)
         self._maker_queue: asyncio.Queue | None = None
