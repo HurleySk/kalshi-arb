@@ -27,26 +27,37 @@ pip3 install -r requirements.txt --break-system-packages
 
 ## Architecture
 
-Three async components run concurrently in `ArbBot.run()` (`src/main.py`):
+Five async components run concurrently in `ArbBot.run()` (`src/main.py`):
 
-1. **Event Discovery** (`_discover_events` → `api.fetch_events_page`) — REST polls Kalshi for mutually exclusive events with 2+ active markets. Does a full paginated scan on startup (~70 pages, sorted by close_time so near-term events subscribe first), then re-polls page 1 every 60s for new events.
+1. **Event Discovery** (`src/discovery.py` → `EventDiscovery.poll_loop`) — REST polls Kalshi for mutually exclusive events with 2+ active markets. Does a full paginated scan on startup (~70 pages, sorted by close_time so near-term events subscribe first), then re-polls page 1 every 60s for new events. Also runs a `cleanup_loop` every 5 minutes to remove expired events from `OrderbookManager` and `market_metadata`.
 
-2. **WebSocket Scanner** (`scanner.MarketScanner` + `scanner.OrderbookManager`) — Maintains real-time orderbook state via `orderbook_delta` channel. On every update, fires `_on_orderbook_update` callback synchronously.
+2. **WebSocket Scanner** (`scanner.MarketScanner` + `scanner.OrderbookManager`) — Maintains real-time orderbook state via `orderbook_delta` channel. On every update, enqueues the market ticker to `_ob_update_queue`. Reconnects automatically on disconnect.
 
-3. **Arb Detection → Execution** (`_on_orderbook_update` → `engine.evaluate` → `executor.execute`) — The hot path. On each orderbook update, evaluates whether selling yes on all outcomes is profitable after taker fees (7%). If profitable and passes filters, fires a batch order via REST API.
+3. **Orderbook Processor** (`_process_orderbook_updates`) — Drains `_ob_update_queue` and routes each update through `Dispatcher` (`src/dispatch.py`). Dispatcher evaluates arb signals, guards duplicate execution per event (pending set), enforces signal cooldowns, and routes fills.
 
-4. **Maker Layer** (`engine.evaluate_maker` → `maker.MakerManager`) — When bid sum is between $1.00 and the taker threshold (~$1.07), posts limit orders at best bid prices as maker (0% fees). On fill, completes the arb via cancel_and_take (cancel remaining, taker-complete) or tighten_on_fill (progressively tighten prices). Reprices on orderbook updates, cancels if arb disappears.
+4. **Arb Detection → Execution** (`Dispatcher.process_orderbook_update` → `engine.evaluate` → `executor.execute`) — The hot path. On each orderbook update, evaluates whether selling yes on all outcomes is profitable after taker fees (7%). If profitable and passes filters, fires a batch order via REST API.
+
+5. **Maker Layer** (`engine.evaluate_maker` → `maker.MakerManager`) — When bid sum is between $1.00 and the taker threshold (~$1.07), posts limit orders at best bid prices as maker (0% fees). On fill, completes the arb via cancel_and_take (cancel remaining, taker-complete) or tighten_on_fill (progressively tighten prices). Reprices on orderbook updates, cancels if arb disappears.
+
+### Key modules
+
+- `src/discovery.py` — `EventDiscovery`: REST scan, register events, cleanup expired
+- `src/dispatch.py` — `Dispatcher`: orderbook update routing, pending guard, fill routing
+- `src/engine.py` — `ArbEngine`: taker and maker signal evaluation
+- `src/executor.py` — `ExecutionManager`: batch order execution, partial fill unwind
+- `src/maker.py` — `MakerManager`: limit order posting and fill handling
+- `src/scanner.py` — `MarketScanner` + `OrderbookManager`: WebSocket + orderbook state
 
 ### Data flow
 
 ```
-REST /events → parse_events → register with OrderbookManager → WS subscribe
-WS orderbook_delta → OrderbookManager.apply_snapshot/apply_delta
-  → _on_orderbook_update
+REST /events → EventDiscovery.register_events → OrderbookManager.register_event → WS subscribe
+WS orderbook_delta → OrderbookManager.apply_snapshot/apply_delta → _ob_update_queue
+  → Dispatcher.process_orderbook_update
     → ArbEngine.evaluate (taker: bid sum > $1.07) → ExecutionManager.execute
     → ArbEngine.evaluate_maker (maker: bid sum $1.00-$1.07) → MakerManager.post
     → MakerManager.on_orderbook_update (reprice active maker orders)
-WS fill → _on_fill dispatcher → executor.handle_fill OR maker.handle_fill
+WS fill → Dispatcher.route_fill → executor.handle_fill OR maker.handle_fill
 ```
 
 ### Risk Modes (`src/risk.py`)
@@ -101,5 +112,4 @@ Taker fee: `0.07 * price * (1 - price)` per contract. All orders cross the sprea
 
 - `calculate_event_pnl` in `positions.py` assumes equal fill quantities across all legs
 - `profit_pct` is relative to $1 max payout, not capital at risk
-- No WebSocket reconnection logic — a disconnect stops all monitoring
 - `open_interest`, `liquidity` fields are extracted from the API but not yet used for filtering
