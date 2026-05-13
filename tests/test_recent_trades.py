@@ -16,7 +16,7 @@ def test_recent_trades_rejects_stale_market():
     bot = _make_mock_bot()
     bot.api.get_market_trades = AsyncMock(return_value={"trades": [], "cursor": ""})
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         bot._validate_recent_trades(["M1", "M2"])
     )
     assert result is False
@@ -29,7 +29,7 @@ def test_recent_trades_accepts_active_market():
         "cursor": "",
     })
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         bot._validate_recent_trades(["M1", "M2"])
     )
     assert result is True
@@ -39,7 +39,7 @@ def test_recent_trades_skipped_in_aggressive_mode():
     bot = _make_mock_bot(mode="aggressive")
     bot.api.get_market_trades = AsyncMock(side_effect=AssertionError("should not be called"))
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         bot._validate_recent_trades(["M1"])
     )
     assert result is True

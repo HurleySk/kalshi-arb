@@ -54,7 +54,7 @@ def test_execute_calls_batch_create():
         profit_pct=5.0,
         exposure_ratio=1.5,
     )
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=10))
+    asyncio.run(executor.execute(signal, quantity=10))
     api.batch_create_orders.assert_called_once()
 
 
@@ -68,7 +68,7 @@ def test_is_executing_flag():
         profit_pct=5.0,
         exposure_ratio=1.5,
     )
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=10))
+    asyncio.run(executor.execute(signal, quantity=10))
     # After execution completes, flag should be cleared
     assert not executor.is_executing()
 
@@ -114,7 +114,7 @@ def test_partial_fill_triggers_unwind():
         legs=[("M1", 0.46), ("M2", 0.99)],
         net_profit=0.43, profit_pct=43.0, exposure_ratio=1.3,
     )
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=1))
+    asyncio.run(executor.execute(signal, quantity=1))
 
     assert executor.is_event_blacklisted("E1")
     # batch_create_orders: (1) original arb, (2+) unwind phases
@@ -128,7 +128,7 @@ def test_immediate_fills_are_tracked():
         legs=[("M1", 0.46), ("M2", 0.99)],
         net_profit=0.43, profit_pct=43.0, exposure_ratio=1.3,
     )
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=1))
+    asyncio.run(executor.execute(signal, quantity=1))
 
     positions.record_fill.assert_called()
     call_args = [c.kwargs for c in positions.record_fill.call_args_list]
@@ -143,7 +143,7 @@ def test_unwind_places_buy_order():
         legs=[("M1", 0.46), ("M2", 0.99)],
         net_profit=0.43, profit_pct=43.0, exposure_ratio=1.3,
     )
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=1))
+    asyncio.run(executor.execute(signal, quantity=1))
 
     # Find the unwind call (not the first batch_create_orders call)
     assert api.batch_create_orders.call_count >= 2

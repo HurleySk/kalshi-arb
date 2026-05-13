@@ -75,7 +75,7 @@ def test_partial_fill_detection_counts_correctly():
     executor, api, positions = _partial_fill_executor(fill_timeout=1)
     signal = _medlan_signal()
 
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=1))
+    asyncio.run(executor.execute(signal, quantity=1))
 
     m2_pos = positions.get_position("M2")
     assert m2_pos is not None, "M2 fill was not tracked from batch response"
@@ -87,7 +87,7 @@ def test_partial_fill_blacklists_event():
     executor, _, _ = _partial_fill_executor(fill_timeout=1)
     signal = _medlan_signal()
 
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=1))
+    asyncio.run(executor.execute(signal, quantity=1))
     assert executor.is_event_blacklisted(signal.event_ticker)
 
 
@@ -96,7 +96,7 @@ def test_repeat_execution_prevented():
     executor, _, _ = _partial_fill_executor(fill_timeout=1)
     signal = _medlan_signal()
 
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=1))
+    asyncio.run(executor.execute(signal, quantity=1))
     assert executor.is_event_blacklisted("KXATPSETWINNER-26MAY12MEDLAN-1")
 
 
@@ -105,7 +105,7 @@ def test_unwind_fires_on_partial_fill():
     executor, api, _ = _partial_fill_executor(fill_timeout=1)
     signal = _medlan_signal()
 
-    asyncio.get_event_loop().run_until_complete(executor.execute(signal, quantity=1))
+    asyncio.run(executor.execute(signal, quantity=1))
 
     assert api.batch_create_orders.call_count >= 2
     unwind_call = api.batch_create_orders.call_args_list[1]

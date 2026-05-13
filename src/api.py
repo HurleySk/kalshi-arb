@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 # Basic tier: 200 read tokens/sec, 100 write tokens/sec, 10 tokens per request
 # Stay well under: ~10 reads/sec, ~5 writes/sec
 MIN_REQUEST_INTERVAL = 0.1
+RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 
 
 class KalshiAPI:
@@ -59,17 +60,26 @@ class KalshiAPI:
             if body is not None:
                 kwargs["json"] = body
 
-            async with session.request(method, url, **kwargs) as resp:
-                if resp.status == 429:
-                    wait = 2 ** attempt + 1
-                    logger.warning("Rate limited (429), backing off %ds", wait)
-                    await asyncio.sleep(wait)
-                    continue
-                if resp.status >= 400:
-                    error_body = await resp.text()
-                    logger.error("API error %d %s %s: %s", resp.status, method, path, error_body)
-                    resp.raise_for_status()
-                return await resp.json()
+            try:
+                async with session.request(method, url, **kwargs) as resp:
+                    if resp.status in RETRYABLE_STATUSES:
+                        wait = 2 ** attempt + 1
+                        logger.warning("Retryable error %d on %s %s, backing off %ds (attempt %d/3)",
+                                       resp.status, method, path, wait, attempt + 1)
+                        await asyncio.sleep(wait)
+                        continue
+                    if resp.status >= 400:
+                        error_body = await resp.text()
+                        logger.error("API error %d %s %s: %s", resp.status, method, path, error_body)
+                        resp.raise_for_status()
+                    return await resp.json()
+            except aiohttp.ClientConnectionError:
+                if attempt == 2:
+                    raise
+                wait = 2 ** attempt + 1
+                logger.warning("Connection error on %s %s, backing off %ds (attempt %d/3)",
+                               method, path, wait, attempt + 1)
+                await asyncio.sleep(wait)
 
         raise aiohttp.ClientResponseError(
             request_info=None, history=(), status=429, message="Rate limited after retries"

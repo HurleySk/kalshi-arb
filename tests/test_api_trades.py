@@ -11,6 +11,6 @@ def test_get_market_trades_returns_trades():
         ],
         "cursor": "",
     })
-    result = asyncio.get_event_loop().run_until_complete(api.get_market_trades("M1"))
+    result = asyncio.run(api.get_market_trades("M1"))
     assert len(result.get("trades", [])) == 1
     api._get.assert_called_once_with("/markets/trades", params={"ticker": "M1", "limit": "10"})
