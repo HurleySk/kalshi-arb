@@ -344,6 +344,51 @@ def test_zero_thresholds_accept_all():
     assert signal is not None
 
 
+# --- evaluate_near_expiry tests ---
+
+def _make_engine_near_expiry(**kwargs):
+    profile = RiskProfile(
+        min_profit_pct=2.0,
+        max_exposure_ratio=kwargs.get("max_exposure_ratio", 10.0),
+        min_volume_24h=50.0,
+        min_bid_depth=5,
+        require_recent_trades=False,
+        near_term_hours=24,
+        hurdle_rate_annual_pct=10.0,
+        unwind_phase1_secs=15,
+        unwind_phase2_secs=30,
+        unwind_price_step_cents=3,
+        near_expiry_window_minutes=30,
+        near_expiry_min_profit_pct=kwargs.get("near_expiry_min_profit_pct", 1.0),
+        near_expiry_min_bid_depth=kwargs.get("near_expiry_min_bid_depth", 1),
+        near_expiry_min_volume_24h=kwargs.get("near_expiry_min_volume_24h", 0.0),
+    )
+    return ArbEngine(risk_profile=profile)
+
+
+def test_near_expiry_fires_when_normal_evaluate_would_fail_filters():
+    """Normal evaluate rejects due to min_volume_24h=50, near_expiry accepts at 0."""
+    engine = _make_engine_near_expiry()
+    orderbooks = {"M1": _ob([(0.40, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    meta = {
+        "M1": {"volume_24h": 0, "close_time": _future_iso(0)},
+        "M2": {"volume_24h": 0, "close_time": _future_iso(0)},
+        "M3": {"volume_24h": 0, "close_time": _future_iso(0)},
+    }
+    assert engine.evaluate("E1", orderbooks, market_metadata=meta) is None
+    signal = engine.evaluate_near_expiry("E1", orderbooks, market_metadata=meta)
+    assert signal is not None
+    assert signal.signal_type == "near_expiry_taker"
+
+
+def test_near_expiry_uses_near_expiry_min_profit_pct():
+    """Signal rejected if below near_expiry_min_profit_pct."""
+    engine = _make_engine_near_expiry(near_expiry_min_profit_pct=50.0)
+    orderbooks = {"M1": _ob([(0.40, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    meta = {t: {"volume_24h": 0, "close_time": _future_iso(0)} for t in ["M1", "M2", "M3"]}
+    assert engine.evaluate_near_expiry("E1", orderbooks, market_metadata=meta) is None
+
+
 # --- evaluate_buy_side tests ---
 
 def test_evaluate_buy_side_profitable():

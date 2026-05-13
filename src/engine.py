@@ -22,6 +22,9 @@ class ArbEngine:
         self.max_contracts_per_arb = max_contracts_per_arb
         self.min_open_interest = risk_profile.min_open_interest
         self.min_liquidity = risk_profile.min_liquidity
+        self.near_expiry_min_profit_pct = risk_profile.near_expiry_min_profit_pct
+        self.near_expiry_min_bid_depth = risk_profile.near_expiry_min_bid_depth
+        self.near_expiry_min_volume_24h = risk_profile.near_expiry_min_volume_24h
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -177,6 +180,56 @@ class ArbEngine:
             profit_pct=profit_pct,
             exposure_ratio=exp_ratio,
             signal_type="maker",
+        )
+
+    def evaluate_near_expiry(
+        self,
+        event_ticker: str,
+        orderbooks: dict[str, Orderbook],
+        market_metadata: dict[str, dict] | None = None,
+    ) -> TradeSignal | None:
+        legs: list[tuple[str, float]] = []
+        for ticker, book in orderbooks.items():
+            best_bid = book.best_yes_bid()
+            if best_bid is None:
+                return None
+            legs.append((ticker, best_bid))
+
+        bid_prices = [price for _, price in legs]
+
+        if self.near_expiry_min_bid_depth > 1:
+            for ticker, best_bid in legs:
+                if orderbooks[ticker].yes_bid_depth_at(best_bid) < self.near_expiry_min_bid_depth:
+                    return None
+
+        if self.near_expiry_min_volume_24h > 0 and market_metadata:
+            for ticker, _ in legs:
+                if market_metadata.get(ticker, {}).get("volume_24h", 0) < self.near_expiry_min_volume_24h:
+                    return None
+
+        profit = arb_profit(bid_prices)
+        if profit <= 0:
+            return None
+
+        profit_pct = (profit / 1.0) * 100
+        if profit_pct < self.near_expiry_min_profit_pct:
+            return None
+
+        exp_ratio = exposure_ratio(bid_prices)
+        if exp_ratio > self.max_exposure_ratio:
+            return None
+
+        depths = [orderbooks[ticker].yes_bid_depth_at(price) for ticker, price in legs]
+        quantity = max(1, min(int(min(depths)), self.max_contracts_per_arb))
+
+        return TradeSignal(
+            event_ticker=event_ticker,
+            legs=legs,
+            net_profit=profit,
+            profit_pct=profit_pct,
+            exposure_ratio=exp_ratio,
+            signal_type="near_expiry_taker",
+            quantity=quantity,
         )
 
     def evaluate_buy_side(
