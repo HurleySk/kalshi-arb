@@ -29,7 +29,7 @@ class MakerManager:
     VALID_FILL_MODES = {"cancel_and_take", "tighten_on_fill"}
 
     def __init__(self, api: KalshiAPI, fill_mode: str = "cancel_and_take",
-                 max_events: int = 3,
+                 max_events: int = 3, risk_profile=None,
                  tighten_phase1_secs: int = 15, tighten_phase2_secs: int = 30,
                  tighten_step_cents: int = 3):
         self.api = api
@@ -38,9 +38,14 @@ class MakerManager:
             fill_mode = "cancel_and_take"
         self.fill_mode = fill_mode
         self.max_events = max_events
-        self._tighten_phase1_secs = tighten_phase1_secs
-        self._tighten_phase2_secs = tighten_phase2_secs
-        self._tighten_step_cents = tighten_step_cents
+        if risk_profile is not None:
+            self._tighten_phase1_secs = risk_profile.unwind_phase1_secs
+            self._tighten_phase2_secs = risk_profile.unwind_phase2_secs
+            self._tighten_step_cents = risk_profile.unwind_price_step_cents
+        else:
+            self._tighten_phase1_secs = tighten_phase1_secs
+            self._tighten_phase2_secs = tighten_phase2_secs
+            self._tighten_step_cents = tighten_step_cents
         self._active: dict[str, MakerEvent] = {}
         self._order_to_event: dict[str, str] = {}
         self._completed: dict[str, float] = {}

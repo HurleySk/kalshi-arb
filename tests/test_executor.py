@@ -29,6 +29,20 @@ def _make_executor(fill_timeout=5):
     return ExecutionManager(api=api, positions=positions, fill_timeout_secs=fill_timeout), api, positions
 
 
+def test_executor_accepts_risk_profile_directly():
+    profile = load_risk_profile("conservative", {})
+    api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
+    positions = MagicMock()
+    executor = ExecutionManager(
+        api=api, positions=positions,
+        fill_timeout_secs=30, risk_profile=profile,
+    )
+    assert executor._unwind_phase1_secs == profile.unwind_phase1_secs
+    assert executor._unwind_phase2_secs == profile.unwind_phase2_secs
+    assert executor._unwind_price_step_cents == profile.unwind_price_step_cents
+
+
 def test_build_orders_from_signal():
     executor, api, _ = _make_executor()
     signal = TradeSignal(

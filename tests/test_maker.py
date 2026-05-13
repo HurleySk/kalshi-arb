@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.maker import MakerManager
 from src.models import TradeSignal, Orderbook
+from src.risk import load_risk_profile
 
 
 def _make_maker(max_events=3, fill_mode="cancel_and_take"):
@@ -183,3 +184,13 @@ def test_reprice_throttled():
 
     asyncio.run(maker.on_orderbook_update("E1", books))
     assert api.cancel_order.call_count == first_cancel_count
+
+
+def test_maker_accepts_risk_profile():
+    profile = load_risk_profile("conservative", {})
+    api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
+    maker = MakerManager(api=api, risk_profile=profile)
+    assert maker._tighten_phase1_secs == profile.unwind_phase1_secs
+    assert maker._tighten_phase2_secs == profile.unwind_phase2_secs
+    assert maker._tighten_step_cents == profile.unwind_price_step_cents
