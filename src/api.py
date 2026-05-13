@@ -153,6 +153,16 @@ class KalshiAPI:
             "count": quantity,
         }
 
+    def build_buy_order(self, ticker: str, yes_price: float, quantity: int) -> dict:
+        return {
+            "ticker": ticker,
+            "action": "buy",
+            "side": "yes",
+            "type": "limit",
+            "yes_price": round(yes_price * 100),
+            "count": quantity,
+        }
+
     def build_close_order(self, ticker: str, qty: int) -> dict:
         # Kalshi API valid range: yes_price 1-99 (cents). 100 returns invalid_price error.
         if qty < 0:

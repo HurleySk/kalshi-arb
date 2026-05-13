@@ -48,10 +48,14 @@ class ExecutionManager:
         return self._executing
 
     def build_orders(self, signal: TradeSignal, quantity: int) -> list[dict]:
-        return [
-            self.api.build_sell_order(ticker=ticker, yes_price=price, quantity=quantity)
-            for ticker, price in signal.legs
-        ]
+        orders = []
+        for i, (ticker, price) in enumerate(signal.legs):
+            action = signal.leg_actions[i] if signal.leg_actions else "sell"
+            if action == "buy":
+                orders.append(self.api.build_buy_order(ticker=ticker, yes_price=price, quantity=quantity))
+            else:
+                orders.append(self.api.build_sell_order(ticker=ticker, yes_price=price, quantity=quantity))
+        return orders
 
     async def execute(self, signal: TradeSignal, quantity: int = 1):
         if self._executing:

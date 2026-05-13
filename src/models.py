@@ -95,3 +95,4 @@ class TradeSignal:
     exposure_ratio: float
     signal_type: str = "taker"
     quantity: int = 1
+    leg_actions: list[str] | None = None  # None means all legs are "sell"

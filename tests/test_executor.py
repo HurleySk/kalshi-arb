@@ -165,3 +165,45 @@ def test_unwind_places_buy_order():
     unwind_orders = unwind_call[0][0]
     assert unwind_orders[0]["action"] == "buy"
     assert unwind_orders[0]["ticker"] == "M2"
+
+
+def test_build_orders_buy_when_leg_action_is_buy():
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.35), ("M2", 0.40)],
+        net_profit=0.05,
+        profit_pct=5.0,
+        exposure_ratio=1.0,
+        signal_type="buy_side_taker",
+        leg_actions=["buy", "buy"],
+    )
+    api = MagicMock()
+    api.build_buy_order.return_value = {"action": "buy"}
+    api.build_sell_order.return_value = {"action": "sell"}
+    executor = ExecutionManager(api=api, positions=MagicMock(),
+                                fill_timeout_secs=10,
+                                risk_profile=load_risk_profile("aggressive", {}))
+    orders = executor.build_orders(signal, quantity=1)
+    assert api.build_buy_order.call_count == 2
+    assert api.build_sell_order.call_count == 0
+
+
+def test_build_orders_mixed_actions():
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.60), ("M2", 0.35)],
+        net_profit=0.03,
+        profit_pct=3.0,
+        exposure_ratio=0.0,
+        signal_type="monotone",
+        leg_actions=["sell", "buy"],
+    )
+    api = MagicMock()
+    api.build_buy_order.return_value = {"action": "buy"}
+    api.build_sell_order.return_value = {"action": "sell"}
+    executor = ExecutionManager(api=api, positions=MagicMock(),
+                                fill_timeout_secs=10,
+                                risk_profile=load_risk_profile("aggressive", {}))
+    orders = executor.build_orders(signal, quantity=1)
+    assert api.build_sell_order.call_count == 1
+    assert api.build_buy_order.call_count == 1
