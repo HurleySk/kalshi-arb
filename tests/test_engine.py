@@ -156,6 +156,26 @@ def test_evaluate_maker_rejects_beyond_horizon():
     assert engine.evaluate_maker("E1", orderbooks, market_metadata=meta) is None
 
 
+def test_evaluate_maker_horizon_uses_event_tickers_not_global_metadata():
+    """_days_to_expiry must scope to event tickers only.
+
+    Regression: when the shared market_metadata dict is passed directly (instead of
+    a per-event view), an unrelated market closing soon must not fool the horizon guard
+    into accepting a far-dated event.
+    """
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    # Event markets close in 6h — beyond the 2h maker horizon, should be rejected.
+    # An unrelated market closes in 30 minutes — must not influence this evaluation.
+    meta = {
+        "M1": {"close_time": _future_iso(6 / 24), "volume_24h": 500},
+        "M2": {"close_time": _future_iso(6 / 24), "volume_24h": 500},
+        "M3": {"close_time": _future_iso(6 / 24), "volume_24h": 500},
+        "UNRELATED": {"close_time": _future_iso(0.5 / 24), "volume_24h": 999},
+    }
+    orderbooks = {"M1": _ob([(0.35, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    assert engine.evaluate_maker("E1", orderbooks, market_metadata=meta) is None
+
+
 def test_evaluate_maker_signal_in_fee_gap():
     """3 legs at $0.35 (sum=$1.05): taker profit < 1%, maker profit 5%."""
     engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)

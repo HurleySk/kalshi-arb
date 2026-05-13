@@ -159,9 +159,9 @@ class ArbEngine:
             return None
 
         # Maker ties up capital — require known expiry within horizon
-        if not market_metadata:
+        if market_metadata is None:
             return None
-        days = self._days_to_expiry(market_metadata)
+        days = self._days_to_expiry({t: market_metadata.get(t, {}) for t, _, _ in legs})
         if days is None:
             return None
         if days > self.maker_max_horizon_hours / 24:
