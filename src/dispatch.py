@@ -75,7 +75,11 @@ class Dispatcher:
             return signal
 
         if not signal and self._enable_buy_side_arb:
-            buy_signal = self.engine.evaluate_buy_side(event_ticker, event_books, market_metadata=meta)
+            registered = self.orderbook_mgr.get_registered_market_count(event_ticker)
+            buy_signal = self.engine.evaluate_buy_side(
+                event_ticker, event_books, market_metadata=meta,
+                expected_market_count=registered,
+            )
             if buy_signal and not self.executor.is_executing():
                 if not self.executor.is_event_blacklisted(event_ticker):
                     key = event_ticker + ":buy"

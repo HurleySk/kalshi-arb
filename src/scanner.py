@@ -62,6 +62,9 @@ class OrderbookManager:
     def get_orderbook(self, ticker: str) -> Orderbook | None:
         return self._books.get(ticker)
 
+    def get_registered_market_count(self, event_ticker: str) -> int:
+        return len(self._event_markets.get(event_ticker, []))
+
     def get_event_orderbooks(self, event_ticker: str) -> dict[str, Orderbook]:
         tickers = self._event_markets.get(event_ticker, [])
         result = {}

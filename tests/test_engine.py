@@ -513,6 +513,34 @@ def test_evaluate_buy_side_rejects_no_dominant_outcome():
     assert signal is None
 
 
+def test_evaluate_buy_side_rejects_incomplete_registration():
+    # Bot registered 3 markets but only has orderbook data for 2 — missing one outcome
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={60: 100}),  # ask = 40¢
+        "M2": Orderbook(yes_bids={}, no_bids={40: 100}),  # ask = 60¢
+    }
+    # ask_sum = 1.00, would normally be filtered by profit check; use lower asks
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={65: 100}),  # ask = 35¢
+        "M2": Orderbook(yes_bids={}, no_bids={38: 100}),  # ask = 62¢
+    }
+    # ask_sum = 0.97, but expected_market_count=3 means one market missing → reject
+    signal = engine.evaluate_buy_side("E1", orderbooks, expected_market_count=3)
+    assert signal is None
+
+
+def test_evaluate_buy_side_passes_when_all_markets_present():
+    # Same setup but expected_market_count matches registered count → allowed through
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={45: 100}),  # ask = 55¢
+        "M2": Orderbook(yes_bids={}, no_bids={70: 100}),  # ask = 30¢
+    }
+    signal = engine.evaluate_buy_side("E1", orderbooks, expected_market_count=2)
+    assert signal is not None  # ask_sum = 0.85, max_ask = 0.55, profit > 0, passes
+
+
 # --- evaluate_two_sided tests ---
 
 def _make_two_sided_engine(min_spread_cents=6, max_inventory=10, min_volume=0.0):

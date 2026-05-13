@@ -282,7 +282,15 @@ class ArbEngine:
         event_ticker: str,
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
+        expected_market_count: int | None = None,
     ) -> TradeSignal | None:
+        if expected_market_count is not None and len(orderbooks) < expected_market_count:
+            logger.debug(
+                "buy-side incomplete %s: have %d orderbooks, expected %d registered",
+                event_ticker, len(orderbooks), expected_market_count,
+            )
+            return None
+
         legs: list[tuple[str, float]] = []
         for ticker, book in orderbooks.items():
             best_ask = book.best_yes_ask()
