@@ -72,7 +72,7 @@ class ArbBot:
             orderbook_mgr=self.orderbook_mgr,
             market_metadata=self.discovery.market_metadata,
         )
-        self._ob_update_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._ob_update_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10000)
         self._maker_queue: asyncio.Queue | None = None
         self._maker_dirty_events: set[str] = set()
         self._stats = {

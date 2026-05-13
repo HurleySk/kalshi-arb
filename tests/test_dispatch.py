@@ -63,3 +63,30 @@ def test_dispatch_routes_fill_to_executor():
     fill = {"order_id": "o1", "market_ticker": "M1", "yes_price_dollars": "0.40", "count_fp": "1"}
     dispatcher.route_fill(fill)
     executor.handle_fill.assert_called_once_with(fill)
+
+
+def test_dispatch_respects_signal_cooldown():
+    """A second signal for the same event within the cooldown window should be suppressed."""
+    dispatcher, engine, executor = _make_dispatcher()
+
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.40), ("M2", 0.35), ("M3", 0.35)],
+        net_profit=0.03, profit_pct=3.0, exposure_ratio=1.5,
+    )
+    engine.evaluate.return_value = signal
+
+    dispatcher.orderbook_mgr.apply_snapshot("M1", {"yes_dollars_fp": [["0.4000", "100"]], "no_dollars_fp": []})
+    dispatcher.orderbook_mgr.apply_snapshot("M2", {"yes_dollars_fp": [["0.3500", "100"]], "no_dollars_fp": []})
+    dispatcher.orderbook_mgr.apply_snapshot("M3", {"yes_dollars_fp": [["0.3500", "100"]], "no_dollars_fp": []})
+
+    # First signal fires
+    result1 = dispatcher.process_orderbook_update("M1")
+    assert result1 is not None
+
+    # Clear pending so cooldown is the only guard
+    dispatcher.mark_execution_complete("E1")
+
+    # Second signal within cooldown window should be suppressed
+    result2 = dispatcher.process_orderbook_update("M1")
+    assert result2 is None

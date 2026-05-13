@@ -72,3 +72,11 @@ def test_buy_tracks_realized_pnl():
     tracker.record_fill(ticker="M1", side="yes", price=0.55, quantity=10, action="sell")
     tracker.record_fill(ticker="M1", side="yes", price=0.60, quantity=10, action="buy")
     assert abs(tracker.realized_pnl - (-0.5)) < 1e-9
+
+
+def test_buy_without_prior_sell_is_ignored():
+    tracker = PositionTracker()
+    tracker.record_fill(ticker="M1", side="yes", price=0.60, quantity=5, action="buy")
+    pos = tracker.get_position("M1")
+    assert pos is None
+    assert tracker.realized_pnl == 0.0

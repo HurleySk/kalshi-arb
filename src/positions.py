@@ -21,7 +21,10 @@ class PositionTracker:
         if quantity <= 0:
             return
 
-        if action == "buy" and ticker in self._positions:
+        if action == "buy":
+            if ticker not in self._positions:
+                logger.warning("Buy fill for %s with no open position — ignoring", ticker)
+                return
             pos = self._positions[ticker]
             closed_qty = min(quantity, pos.quantity)
             pnl = (pos.avg_price - price) * closed_qty

@@ -29,6 +29,8 @@ class EventDiscovery:
                     "close_time": m.close_time,
                     "expected_expiration_time": m.expected_expiration_time,
                     "volume_24h": m.volume_24h,
+                    "open_interest": m.open_interest,
+                    "liquidity": m.liquidity,
                 }
         return new_tickers
 

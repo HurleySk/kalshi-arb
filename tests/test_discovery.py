@@ -21,7 +21,7 @@ def test_register_events_stores_metadata():
     market = Market(
         ticker="M1", event_ticker="E1", title="Test",
         status="active", close_time="2026-06-01T00:00:00Z",
-        volume_24h=100.0,
+        volume_24h=100.0, open_interest=500.0, liquidity=2000.0,
     )
     event = Event(event_ticker="E1", title="Test Event", series_ticker="S1",
                   mutually_exclusive=True, markets=[market])
@@ -30,6 +30,8 @@ def test_register_events_stores_metadata():
     assert new_tickers == ["M1"]
     assert "M1" in discovery.market_metadata
     assert discovery.market_metadata["M1"]["volume_24h"] == 100.0
+    assert discovery.market_metadata["M1"]["open_interest"] == 500.0
+    assert discovery.market_metadata["M1"]["liquidity"] == 2000.0
 
 
 def test_register_events_skips_duplicates():
