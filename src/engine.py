@@ -292,12 +292,14 @@ class ArbEngine:
 
         ask_prices = [price for _, price in legs]
         ask_sum = sum(ask_prices)
-        # If the registered outcomes cost far less than $1 combined, we almost certainly
-        # have only a partial subset of the event's markets — not a real arb.
-        if ask_sum < 0.60:
+        max_ask = max(ask_prices)
+        # Two coverage guards — either alone can be fooled, together they're robust:
+        #  1. ask_sum < 0.60: only low-prob outcomes registered (dominant bucket missing)
+        #  2. max_ask < 0.20: no single outcome has meaningful probability registered
+        if ask_sum < 0.60 or max_ask < 0.20:
             logger.debug(
-                "buy-side coverage-filtered %s: ask_sum=%.4f (threshold 0.60) — ask sum too low, possible incomplete outcome registration",
-                event_ticker, ask_sum,
+                "buy-side coverage-filtered %s: ask_sum=%.4f max_ask=%.4f — likely missing high-probability outcome legs",
+                event_ticker, ask_sum, max_ask,
             )
             return None
 

@@ -425,6 +425,25 @@ class ArbBot:
         logger.info("=" * 60)
 
 
+_PIDFILE = Path("/tmp/kalshi-arb.pid")
+
+
+def _acquire_pidfile() -> None:
+    if _PIDFILE.exists():
+        try:
+            pid = int(_PIDFILE.read_text().strip())
+            os.kill(pid, 0)  # signal 0 = existence check only
+            print(f"Another instance is already running (PID {pid}). Exiting.")
+            sys.exit(1)
+        except (ProcessLookupError, PermissionError):
+            pass  # stale pidfile — previous run crashed without cleanup
+    _PIDFILE.write_text(str(os.getpid()))
+
+
+def _release_pidfile() -> None:
+    _PIDFILE.unlink(missing_ok=True)
+
+
 def main():
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
     if not os.path.exists(config_path):
@@ -432,8 +451,12 @@ def main():
         print("Copy config.example.yaml to config.yaml and fill in your credentials.")
         sys.exit(1)
 
-    bot = ArbBot(config_path)
-    asyncio.run(bot.run())
+    _acquire_pidfile()
+    try:
+        bot = ArbBot(config_path)
+        asyncio.run(bot.run())
+    finally:
+        _release_pidfile()
 
 
 if __name__ == "__main__":

@@ -491,8 +491,8 @@ def test_evaluate_buy_side_rejects_zero_ask():
     assert signal is None
 
 
-def test_evaluate_buy_side_rejects_incomplete_coverage():
-    # Three legs at 1¢ ask + one at 3¢ → sum=6¢ — only a partial subset of event outcomes
+def test_evaluate_buy_side_rejects_incomplete_coverage_low_sum():
+    # Three legs at 1¢ ask + one at 3¢ → sum=6¢ — ask_sum < 0.60 filter fires
     engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
     orderbooks = {
         "M1": Orderbook(yes_bids={}, no_bids={99: 100}),  # YES ask = 1¢
@@ -500,6 +500,15 @@ def test_evaluate_buy_side_rejects_incomplete_coverage():
         "M3": Orderbook(yes_bids={}, no_bids={99: 100}),
         "M4": Orderbook(yes_bids={}, no_bids={97: 100}),  # YES ask = 3¢
     }
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is None
+
+
+def test_evaluate_buy_side_rejects_no_dominant_outcome():
+    # Sum passes 0.60 but max ask is only 9¢ — high-prob outcome not registered
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {f"M{i}": Orderbook(yes_bids={}, no_bids={91: 100}) for i in range(8)}
+    # 8 legs at 9¢ each → sum=72¢ (passes sum check), max=9¢ (fails max check)
     signal = engine.evaluate_buy_side("E1", orderbooks)
     assert signal is None
 
