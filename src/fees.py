@@ -27,6 +27,14 @@ def maker_exposure_ratio(bid_prices: list[float]) -> float:
     return worst_loss / net_premium
 
 
+def monotone_pair_profit(upper_bid: float, lower_ask: float) -> float:
+    """Net profit from selling the upper-threshold contract and buying the lower-threshold contract.
+    Risk-free because P(above lower) >= P(above upper) always."""
+    gross = upper_bid - lower_ask
+    fees = taker_fee(upper_bid) + taker_fee(lower_ask)
+    return gross - fees
+
+
 def buy_side_arb_profit(ask_prices: list[float]) -> float:
     """Per-contract net profit from buying all outcomes at ask prices after taker fees."""
     gross = 1.0 - sum(ask_prices)

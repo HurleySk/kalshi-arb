@@ -1,5 +1,5 @@
 import math
-from src.fees import taker_fee, arb_profit, exposure_ratio, maker_arb_profit, buy_side_arb_profit, TAKER_FEE_RATE
+from src.fees import taker_fee, arb_profit, exposure_ratio, maker_arb_profit, buy_side_arb_profit, monotone_pair_profit, TAKER_FEE_RATE
 
 
 def test_taker_fee_at_50_cents():
@@ -92,3 +92,20 @@ def test_buy_side_profit_exact():
     asks = [0.30, 0.30, 0.30]
     expected = 1.0 - sum(asks) - sum(taker_fee(p) for p in asks)
     assert abs(buy_side_arb_profit(asks) - expected) < 1e-9
+
+
+def test_monotone_pair_profit_positive_when_upper_bid_exceeds_lower_ask():
+    # Sell upper at 0.65, buy lower at 0.55
+    profit = monotone_pair_profit(upper_bid=0.65, lower_ask=0.55)
+    assert profit > 0
+
+
+def test_monotone_pair_profit_negative_when_spread_too_small():
+    profit = monotone_pair_profit(upper_bid=0.55, lower_ask=0.54)
+    assert profit < 0
+
+
+def test_monotone_pair_profit_exact():
+    ub, la = 0.65, 0.50
+    expected = (ub - la) - taker_fee(ub) - taker_fee(la)
+    assert abs(monotone_pair_profit(ub, la) - expected) < 1e-9
