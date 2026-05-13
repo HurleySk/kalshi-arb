@@ -20,6 +20,10 @@ class RiskProfile:
     near_expiry_min_profit_pct: float = 1.0
     near_expiry_min_bid_depth: int = 1
     near_expiry_min_volume_24h: float = 0.0
+    two_sided_min_spread_cents: int = 6
+    two_sided_max_inventory: int = 0  # 0 = disabled
+    two_sided_timeout_secs: int = 120
+    two_sided_min_volume_24h: float = 50.0
 
 
 PRESETS: dict[str, dict] = {
@@ -39,6 +43,10 @@ PRESETS: dict[str, dict] = {
         "near_expiry_min_profit_pct": 1.0,
         "near_expiry_min_bid_depth": 1,
         "near_expiry_min_volume_24h": 0.0,
+        "two_sided_min_spread_cents": 6,
+        "two_sided_max_inventory": 10,
+        "two_sided_timeout_secs": 120,
+        "two_sided_min_volume_24h": 50.0,
     },
     "moderate": {
         "min_volume_24h": 10.0,
@@ -56,6 +64,10 @@ PRESETS: dict[str, dict] = {
         "near_expiry_min_profit_pct": 0.5,
         "near_expiry_min_bid_depth": 1,
         "near_expiry_min_volume_24h": 0.0,
+        "two_sided_min_spread_cents": 4,
+        "two_sided_max_inventory": 25,
+        "two_sided_timeout_secs": 180,
+        "two_sided_min_volume_24h": 10.0,
     },
     "aggressive": {
         "min_volume_24h": 0.0,
@@ -73,6 +85,10 @@ PRESETS: dict[str, dict] = {
         "near_expiry_min_profit_pct": 0.3,
         "near_expiry_min_bid_depth": 1,
         "near_expiry_min_volume_24h": 0.0,
+        "two_sided_min_spread_cents": 2,
+        "two_sided_max_inventory": 50,
+        "two_sided_timeout_secs": 300,
+        "two_sided_min_volume_24h": 0.0,
     },
 }
 

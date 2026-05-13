@@ -67,3 +67,17 @@ def test_moderate_preset_has_wider_window():
 def test_aggressive_preset_has_widest_window():
     profile = load_risk_profile("aggressive", {})
     assert profile.near_expiry_window_minutes == 120
+
+
+def test_conservative_two_sided_fields():
+    profile = load_risk_profile("conservative", {})
+    assert profile.two_sided_min_spread_cents == 6
+    assert profile.two_sided_max_inventory == 10
+    assert profile.two_sided_timeout_secs == 120
+    assert profile.two_sided_min_volume_24h == 50.0
+
+
+def test_aggressive_two_sided_fields():
+    profile = load_risk_profile("aggressive", {})
+    assert profile.two_sided_min_spread_cents == 2
+    assert profile.two_sided_max_inventory == 50
