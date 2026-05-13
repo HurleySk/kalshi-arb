@@ -166,8 +166,8 @@ class ExecutionManager:
                                     prev_oid: str | None, action: str = "buy") -> tuple[bool, float, str]:
         if prev_oid:
             await self.api.cancel_order(prev_oid)
-        order = [{"ticker": ticker, "action": action, "side": "yes",
-                  "type": "limit", "yes_price": price_cents, "count": qty}]
+        build = self.api.build_buy_order if action == "buy" else self.api.build_sell_order
+        order = [build(ticker=ticker, yes_price=price_cents / 100, quantity=qty)]
         resp = await self.api.batch_create_orders(order)
         inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
         status = inner.get("status", "")

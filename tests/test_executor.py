@@ -101,6 +101,10 @@ def _make_executor_with_profile(mode="conservative", fill_timeout=1):
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
     })
+    api.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+        "ticker": ticker, "action": "buy", "side": "yes",
+        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+    })
     api.batch_create_orders = AsyncMock(return_value={
         "orders": [
             {"order": {"order_id": "o1", "ticker": "M1", "status": "resting",

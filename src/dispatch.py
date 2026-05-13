@@ -164,7 +164,7 @@ class Dispatcher:
             return False
         now = datetime.now(timezone.utc)
         cutoff = now + timedelta(minutes=self._near_expiry_window_minutes)
-        for mt in self.orderbook_mgr._event_markets.get(event_ticker, []):
+        for mt in self.orderbook_mgr.get_event_markets(event_ticker):
             close_dt = self._market_expiry_cache.get(mt)
             if close_dt is None:
                 close_str = self.market_metadata.get(mt, {}).get("close_time", "")

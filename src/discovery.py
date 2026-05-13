@@ -80,19 +80,16 @@ class EventDiscovery:
                 }
         return new_tickers
 
-    def cleanup_expired(self) -> set[str]:
-        now = datetime.now(timezone.utc)
+    def _collect_expired_events(self, now: datetime) -> set[str]:
         expired: set[str] = set()
-
         for event_ticker in list(self.event_tickers):
-            market_tickers = self.orderbook_mgr._event_markets.get(event_ticker, [])
+            market_tickers = self.orderbook_mgr.get_event_markets(event_ticker)
             if not market_tickers:
                 self.event_tickers.discard(event_ticker)
                 continue
             all_expired = True
             for mt in market_tickers:
-                meta = self.market_metadata.get(mt, {})
-                close_str = meta.get("close_time", "")
+                close_str = self.market_metadata.get(mt, {}).get("close_time", "")
                 if not close_str:
                     all_expired = False
                     break
@@ -106,9 +103,12 @@ class EventDiscovery:
                     break
             if all_expired:
                 expired.add(event_ticker)
+        return expired
 
+    def cleanup_expired(self) -> set[str]:
+        expired = self._collect_expired_events(datetime.now(timezone.utc))
         for event_ticker in expired:
-            market_tickers = self.orderbook_mgr._event_markets.get(event_ticker, [])
+            market_tickers = self.orderbook_mgr.get_event_markets(event_ticker)
             for mt in market_tickers:
                 self.market_metadata.pop(mt, None)
             self.orderbook_mgr.unregister_event(event_ticker)
@@ -116,7 +116,6 @@ class EventDiscovery:
             self.event_tickers.discard(event_ticker)
             self.event_total_markets.pop(event_ticker, None)
             logger.info("Cleaned up expired event: %s (%d markets)", event_ticker, len(market_tickers))
-
         return expired
 
     async def full_scan(self):
