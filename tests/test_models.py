@@ -59,3 +59,30 @@ def test_trade_signal_maker_type():
         signal_type="maker",
     )
     assert signal.signal_type == "maker"
+
+
+def test_best_yes_ask_from_no_bids():
+    book = Orderbook(yes_bids={}, no_bids={60: 10.0})
+    assert book.best_yes_ask() == 0.40
+
+
+def test_best_yes_ask_returns_none_when_no_no_bids():
+    book = Orderbook(yes_bids={40: 10.0}, no_bids={})
+    assert book.best_yes_ask() is None
+
+
+def test_best_yes_ask_uses_highest_no_bid():
+    # Highest NO bid = 70¢ → YES ask = 30¢
+    book = Orderbook(yes_bids={}, no_bids={60: 5.0, 70: 3.0})
+    assert book.best_yes_ask() == 0.30
+
+
+def test_yes_ask_depth_at_sums_matching_no_bids():
+    # YES ask 40¢ → need NO bids at 60¢ or higher
+    book = Orderbook(yes_bids={}, no_bids={60: 5.0, 65: 3.0, 50: 10.0})
+    assert book.yes_ask_depth_at(0.40) == 8.0  # 5 + 3 (not 50¢ NO bid)
+
+
+def test_yes_ask_depth_at_returns_zero_when_no_match():
+    book = Orderbook(yes_bids={}, no_bids={30: 10.0})
+    assert book.yes_ask_depth_at(0.40) == 0.0

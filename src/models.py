@@ -23,6 +23,15 @@ class Orderbook:
             if cents >= round(price * 100)
         )
 
+    def best_yes_ask(self) -> float | None:
+        if not self.no_bids:
+            return None
+        return round(1.0 - max(self.no_bids) / 100.0, 2)
+
+    def yes_ask_depth_at(self, price: float) -> float:
+        no_price_cents = round((1.0 - price) * 100)
+        return sum(qty for cents, qty in self.no_bids.items() if cents >= no_price_cents)
+
 
 @dataclass
 class Market:
