@@ -65,6 +65,7 @@ class ArbBot:
         self._last_signal_time: dict[str, float] = {}
         self._signal_cooldown = 60.0
         self._pending_execution: set[str] = set()
+        self._ob_update_queue: asyncio.Queue[str] = asyncio.Queue()
         self._maker_queue: asyncio.Queue | None = None
         self._maker_dirty_events: set[str] = set()
         self._stats = {
@@ -115,55 +116,61 @@ class ArbBot:
             self.executor.handle_fill(fill_data)
 
     def _on_orderbook_update(self, market_ticker: str):
-        event_ticker = self.orderbook_mgr.get_event_for_market(market_ticker)
-        if not event_ticker:
-            return
+        try:
+            self._ob_update_queue.put_nowait(market_ticker)
+        except asyncio.QueueFull:
+            pass
 
-        if self.executor.is_circuit_breaker_tripped():
-            return
+    async def _process_orderbook_updates(self):
+        while True:
+            market_ticker = await self._ob_update_queue.get()
+            event_ticker = self.orderbook_mgr.get_event_for_market(market_ticker)
+            if not event_ticker:
+                continue
 
-        if event_ticker in self._pending_execution:
-            return
+            if self.executor.is_circuit_breaker_tripped():
+                continue
 
-        event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
-        meta = {t: self._market_metadata.get(t, {}) for t in event_books}
+            if event_ticker in self._pending_execution:
+                continue
 
-        # Taker layer: immediate execution on fat arbs
-        signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
+            event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
+            meta = {t: self._market_metadata.get(t, {}) for t in event_books}
 
-        if signal and not self.executor.is_executing():
-            if self.executor.is_event_blacklisted(event_ticker):
-                return
-            if self.maker and self.maker.is_event_active(event_ticker):
-                asyncio.create_task(self.maker.cancel_event(event_ticker))
-            last = self._last_signal_time.get(event_ticker, 0)
-            if time.time() - last < self._signal_cooldown:
-                return
-            self._last_signal_time[event_ticker] = time.time()
-            self._stats["arbs_detected"] += 1
-            self._stats["total_theoretical_profit"] += signal.net_profit
-            logger.info(
-                json.dumps({
-                    "event": "arb_detected",
-                    "event_ticker": event_ticker,
-                    "legs": signal.legs,
-                    "net_profit": round(signal.net_profit, 6),
-                    "profit_pct": round(signal.profit_pct, 2),
-                    "exposure_ratio": round(signal.exposure_ratio, 2),
-                })
-            )
-            self._pending_execution.add(event_ticker)
-            asyncio.create_task(self._execute_and_track(signal))
-            return
+            signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
 
-        # Signal maker worker that this event needs attention
-        if self.maker and not signal:
-            self._maker_dirty_events.add(event_ticker)
-            if self._maker_queue and not self._maker_queue.full():
-                try:
-                    self._maker_queue.put_nowait(True)
-                except asyncio.QueueFull:
-                    pass
+            if signal and not self.executor.is_executing():
+                if self.executor.is_event_blacklisted(event_ticker):
+                    continue
+                if self.maker and self.maker.is_event_active(event_ticker):
+                    asyncio.create_task(self.maker.cancel_event(event_ticker))
+                last = self._last_signal_time.get(event_ticker, 0)
+                if time.time() - last < self._signal_cooldown:
+                    continue
+                self._last_signal_time[event_ticker] = time.time()
+                self._stats["arbs_detected"] += 1
+                self._stats["total_theoretical_profit"] += signal.net_profit
+                logger.info(
+                    json.dumps({
+                        "event": "arb_detected",
+                        "event_ticker": event_ticker,
+                        "legs": signal.legs,
+                        "net_profit": round(signal.net_profit, 6),
+                        "profit_pct": round(signal.profit_pct, 2),
+                        "exposure_ratio": round(signal.exposure_ratio, 2),
+                    })
+                )
+                self._pending_execution.add(event_ticker)
+                asyncio.create_task(self._execute_and_track(signal))
+                continue
+
+            if self.maker and not signal:
+                self._maker_dirty_events.add(event_ticker)
+                if self._maker_queue and not self._maker_queue.full():
+                    try:
+                        self._maker_queue.put_nowait(True)
+                    except asyncio.QueueFull:
+                        pass
 
     async def _validate_recent_trades(self, tickers: list[str]) -> bool:
         if not self.risk_profile.require_recent_trades:
@@ -450,9 +457,10 @@ class ArbBot:
         listen_task = asyncio.create_task(self.scanner.listen())
         status_task = asyncio.create_task(self._report_status())
         cleanup_task = asyncio.create_task(self._cleanup_expired_events())
+        ob_task = asyncio.create_task(self._process_orderbook_updates())
         maker_task = asyncio.create_task(self._maker_worker()) if self.maker else None
 
-        tasks = [discovery_task, listen_task, status_task, cleanup_task]
+        tasks = [discovery_task, listen_task, status_task, cleanup_task, ob_task]
         if maker_task:
             tasks.append(maker_task)
 

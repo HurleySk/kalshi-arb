@@ -191,3 +191,45 @@ def test_market_to_event_mapping():
     assert mgr.get_event_for_market("M1") == "E1"
     assert mgr.get_event_for_market("M2") == "E1"
     assert mgr.get_event_for_market("M3") is None
+
+
+def test_listen_with_async_callback():
+    """listen() should support async on_orderbook_update callbacks."""
+    auth = MagicMock()
+    auth.build_headers.return_value = {}
+
+    received_tickers = []
+
+    async def async_callback(ticker: str):
+        received_tickers.append(ticker)
+
+    scanner = MarketScanner(
+        ws_url="wss://fake",
+        auth=auth,
+        orderbook_mgr=OrderbookManager(),
+        on_orderbook_update=async_callback,
+    )
+
+    scanner.orderbook_mgr.register_event("E1", ["M1"])
+
+    messages = [
+        '{"type": "orderbook_snapshot", "msg": {"market_ticker": "M1", "yes_dollars_fp": [["0.40", "100"]], "no_dollars_fp": []}}',
+    ]
+    msg_iter = iter(messages)
+
+    fake_ws = MagicMock()
+
+    async def fake_recv():
+        try:
+            return next(msg_iter)
+        except StopIteration:
+            scanner._running = False
+            scanner._stopping = True
+            raise websockets.ConnectionClosed(None, None)
+
+    fake_ws.recv = fake_recv
+    scanner._ws = fake_ws
+    scanner._running = True
+
+    asyncio.run(scanner.listen())
+    assert "M1" in received_tickers

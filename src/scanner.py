@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import logging
 from typing import Callable
@@ -158,6 +159,12 @@ class MarketScanner:
         if self._subscribed_tickers:
             await self.subscribe(list(self._subscribed_tickers))
 
+    async def _fire_orderbook_update(self, ticker: str):
+        if self.on_orderbook_update:
+            result = self.on_orderbook_update(ticker)
+            if inspect.isawaitable(result):
+                await result
+
     async def listen(self):
         if not self._ws:
             return
@@ -170,14 +177,12 @@ class MarketScanner:
                 if msg_type == "orderbook_snapshot":
                     ticker = data["msg"]["market_ticker"]
                     self.orderbook_mgr.apply_snapshot(ticker, data["msg"])
-                    if self.on_orderbook_update:
-                        self.on_orderbook_update(ticker)
+                    await self._fire_orderbook_update(ticker)
 
                 elif msg_type == "orderbook_delta":
                     ticker = data["msg"]["market_ticker"]
                     self.orderbook_mgr.apply_delta(ticker, data["msg"])
-                    if self.on_orderbook_update:
-                        self.on_orderbook_update(ticker)
+                    await self._fire_orderbook_update(ticker)
 
                 elif msg_type == "fill":
                     if self.on_fill:
