@@ -10,6 +10,7 @@ class TrackedPosition:
     side: str
     quantity: float
     avg_price: float
+    opened_by: str = "sell"  # "sell" = short (sell-side arb), "buy" = long (buy-side arb)
 
 
 class PositionTracker:
@@ -21,33 +22,47 @@ class PositionTracker:
         if quantity <= 0:
             return
 
-        if action == "buy":
-            if ticker not in self._positions:
-                logger.warning("Buy fill for %s with no open position — ignoring", ticker)
-                return
-            pos = self._positions[ticker]
+        pos = self._positions.get(ticker)
+
+        if pos is None:
+            # Opening a new position in whichever direction
+            self._positions[ticker] = TrackedPosition(
+                ticker=ticker, side=side, quantity=quantity, avg_price=price, opened_by=action
+            )
+            logger.info("Fill: %s %dx %s @ %.4f (open)", action, quantity, ticker, price)
+            return
+
+        if pos.opened_by == action:
+            # Same direction as original fill — average into the position
+            total_cost = pos.avg_price * pos.quantity + price * quantity
+            pos.quantity += quantity
+            pos.avg_price = total_cost / pos.quantity
+            logger.info("Fill: %s %dx %s @ %.4f (add)", action, quantity, ticker, price)
+        else:
+            # Opposite direction — close/reduce the position
             closed_qty = min(quantity, pos.quantity)
-            pnl = (pos.avg_price - price) * closed_qty
+            if pos.opened_by == "sell":
+                pnl = (pos.avg_price - price) * closed_qty   # sold high, buying low
+            else:
+                pnl = (price - pos.avg_price) * closed_qty   # bought low, selling high
             self.realized_pnl += pnl
             pos.quantity -= closed_qty
             if pos.quantity <= 0:
                 del self._positions[ticker]
-            logger.info("Close: buy %dx %s @ %.4f (realized: $%.4f)", quantity, ticker, price, pnl)
-            return
+            logger.info("Close: %s %dx %s @ %.4f (realized: $%.4f)", action, quantity, ticker, price, pnl)
 
-        if ticker in self._positions:
-            pos = self._positions[ticker]
-            total_cost = pos.avg_price * pos.quantity + price * quantity
-            pos.quantity += quantity
-            pos.avg_price = total_cost / pos.quantity
-        else:
-            self._positions[ticker] = TrackedPosition(
-                ticker=ticker,
-                side=side,
-                quantity=quantity,
-                avg_price=price,
-            )
-        logger.info("Fill: %s %dx %s @ %.4f", action, quantity, ticker, price)
+    def load_position(self, ticker: str, side: str, quantity: float) -> None:
+        """Load a long position fetched from the exchange on startup.
+
+        Only call with quantity > 0 (long positions). avg_price is set to 0.0 because
+        the exchange does not return cost basis; realized P&L for this position will be
+        overstated when the unwind sell arrives.
+        """
+        assert quantity > 0, f"load_position only accepts long positions (qty > 0), got {quantity}"
+        self._positions[ticker] = TrackedPosition(
+            ticker=ticker, side=side, quantity=quantity, avg_price=0.0, opened_by="buy"
+        )
+        logger.info("Boot: loaded position %s qty=%.0f (cost basis unknown — P&L will be overstated on close)", ticker, quantity)
 
     def get_position(self, ticker: str) -> TrackedPosition | None:
         return self._positions.get(ticker)

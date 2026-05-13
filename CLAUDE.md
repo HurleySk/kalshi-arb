@@ -132,6 +132,7 @@ Near-miss signals are logged at DEBUG level (set `logging.level: DEBUG` in confi
 - `maker near-miss <event>: bid_sum=X.XXXX` — passed all filters but bid sum < $1.00
 - `near-miss <event>: bid_sum=X.XXXX blocked — <ticker> depth/volume < min` — price was in range but depth/volume filter rejected
 - `maker horizon-filtered <event>: ... closes_in=Xh horizon=Yh` — maker-profitable signal blocked by horizon cutoff
+- `buy-side coverage-filtered <event>: ask_sum=X.XXXX — likely missing outcome legs` — buy-side arb rejected because registered outcomes sum to far less than $1, indicating the bot only sees a partial subset of the event's markets
 - `monotone_arb_detected pair=<upper>|<lower>` — threshold constraint violation detected (logged at INFO)
 - STATUS line includes `maker_horizon=N` — count of events closing within `maker_max_horizon_hours` right now
 

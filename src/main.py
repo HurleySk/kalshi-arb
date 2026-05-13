@@ -321,29 +321,60 @@ class ArbBot:
                 maker_horizon_events,
             )
 
-    async def _close_inherited_positions(self):
-        """Close any short positions from previous sessions before trading begins."""
+    async def _boot_reconcile(self):
+        """Cancel orphaned resting orders, load longs, close shorts."""
         try:
-            resp = await self.api.get_positions()
-            shorts = [
-                p["ticker"]
-                for p in resp.get("market_positions", [])
-                if float(p.get("position_fp", 0)) < 0
+            orders_resp = await self.api.get_open_orders()
+            resting = [
+                o for o in orders_resp.get("orders", [])
+                if o.get("status") in ("resting", "pending", "open")
             ]
-            if not shorts:
-                return
-            logger.warning("Found %d inherited short position(s) — closing before trading", len(shorts))
-            for ticker in shorts:
-                order = self.api.build_close_order(ticker, -1)
-                try:
-                    result = await self.api.batch_create_orders([order])
-                    inner = self.api.unwrap_order(result.get("orders", [{}])[0])
-                    logger.info("Closed inherited short: %s status=%s", ticker, inner.get("status", "?"))
-                except Exception:
-                    logger.exception("Failed to close inherited short: %s", ticker)
-                await asyncio.sleep(0.15)
+            if len(resting) >= 100:
+                # get_open_orders returns at most 100 results; warn if we may have hit the cap
+                logger.warning(
+                    "Boot: get_open_orders returned %d resting orders (may be truncated — "
+                    "increase limit or paginate if this fires regularly)",
+                    len(resting),
+                )
+            if resting:
+                logger.warning("Boot: cancelling %d orphaned resting order(s)", len(resting))
+                await self.api.batch_cancel_orders([o["order_id"] for o in resting])
+
+            positions_resp = await self.api.get_positions()
+            longs, shorts = [], []
+            for mp in positions_resp.get("market_positions", []):
+                qty = int(float(mp.get("position_fp", "0")))
+                if qty > 0:
+                    longs.append((mp["ticker"], qty))
+                elif qty < 0:
+                    shorts.append(mp["ticker"])
+
+            if longs:
+                logger.warning(
+                    "Boot: found %d inherited long position(s) — loading into tracker", len(longs)
+                )
+                for ticker, qty in longs:
+                    self.positions.load_position(ticker, "yes", qty)
+
+            if shorts:
+                logger.warning(
+                    "Boot: found %d inherited short position(s) — closing before trading", len(shorts)
+                )
+                for ticker in shorts:
+                    order = self.api.build_close_order(ticker, -1)
+                    try:
+                        result = await self.api.batch_create_orders([order])
+                        inner = self.api.unwrap_order(result.get("orders", [{}])[0])
+                        logger.info("Boot: closed short %s status=%s", ticker, inner.get("status", "?"))
+                    except Exception:
+                        logger.exception("Boot: failed to close short: %s", ticker)
+                    await asyncio.sleep(0.15)
+
+            if not resting and not longs and not shorts:
+                logger.info("Boot: clean slate — no inherited orders or positions")
+
         except Exception:
-            logger.exception("Error closing inherited positions")
+            logger.exception("Boot reconciliation failed")
 
     async def run(self):
         self._setup_logging()
@@ -351,7 +382,7 @@ class ArbBot:
         logger.info("Starting Kalshi Arb Bot in %s mode (risk: %s)",
                      self.cfg.mode.upper(), self.cfg.risk_mode)
 
-        await self._close_inherited_positions()
+        await self._boot_reconcile()
         await self.scanner.connect()
         await self.scanner.subscribe_fills()
 

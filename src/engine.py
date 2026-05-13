@@ -285,11 +285,20 @@ class ArbEngine:
         legs: list[tuple[str, float]] = []
         for ticker, book in orderbooks.items():
             best_ask = book.best_yes_ask()
-            if best_ask is None:
+            if best_ask is None or best_ask < 0.01:
                 return None
             legs.append((ticker, best_ask))
 
         ask_prices = [price for _, price in legs]
+        ask_sum = sum(ask_prices)
+        # If the registered outcomes cost far less than $1 combined, we almost certainly
+        # have only a partial subset of the event's markets — not a real arb.
+        if ask_sum < 0.60:
+            logger.debug(
+                "buy-side coverage-filtered %s: ask_sum=%.4f — likely missing outcome legs",
+                event_ticker, ask_sum,
+            )
+            return None
 
         if self.min_bid_depth > 1:
             for ticker, ask_price in legs:

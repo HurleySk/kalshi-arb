@@ -35,6 +35,7 @@ class ExecutionManager:
         self._unwind_price_step_cents = risk_profile.unwind_price_step_cents if risk_profile else 3
         self.session_realized_loss = 0.0
         self._circuit_breaker_tripped = False
+        self._processed_fill_ids: set[str] = set()
         self._max_session_loss = max_session_loss
         self._circuit_breaker_on_any_loss = circuit_breaker_on_any_loss
 
@@ -88,6 +89,8 @@ class ExecutionManager:
                     price = float(inner.get("yes_price_dollars", 0))
                     qty = int(float(inner.get("fill_count_fp", 0)))
                     execution.filled[oid] = price
+                    if oid:
+                        self._processed_fill_ids.add(oid)
                     self.positions.record_fill(
                         ticker=inner.get("ticker", ""),
                         side=inner.get("side", "yes"),
@@ -230,9 +233,13 @@ class ExecutionManager:
             logger.warning("Ignoring invalid fill: ticker=%r qty=%d data=%s", ticker, quantity, fill_data)
             return
 
-        if self._active and order_id in self._active.filled:
-            logger.debug("Skipping duplicate fill for %s (already tracked from batch response)", order_id)
+        if order_id and order_id in self._processed_fill_ids:
+            logger.debug("Skipping duplicate WS fill for %s (already processed from batch response)", order_id)
         else:
+            if order_id:
+                if len(self._processed_fill_ids) >= 10_000:
+                    self._processed_fill_ids.clear()
+                self._processed_fill_ids.add(order_id)
             self.positions.record_fill(
                 ticker=ticker,
                 side=side,

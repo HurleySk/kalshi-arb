@@ -35,6 +35,70 @@ def _make_bot():
                     return ArbBot("fake.yaml")
 
 
+def _setup_boot_reconcile(bot, *, open_orders=None, positions=None):
+    """Wire up API mocks for _boot_reconcile tests."""
+    bot.api.get_open_orders = AsyncMock(return_value={"orders": open_orders or []})
+    bot.api.get_positions = AsyncMock(return_value={"market_positions": positions or []})
+    bot.api.batch_cancel_orders = AsyncMock(return_value={})
+    bot.api.batch_create_orders = AsyncMock(return_value={"orders": [
+        {"order": {"order_id": "x", "status": "executed", "ticker": "T", "yes_price_dollars": "0.99"}}
+    ]})
+    bot.api.build_close_order = MagicMock(return_value={"ticker": "T", "action": "buy"})
+    bot.api.unwrap_order = MagicMock(return_value={"status": "executed"})
+    bot.positions.load_position = MagicMock()
+
+
+def test_boot_reconcile_clean_slate():
+    bot = _make_bot()
+    _setup_boot_reconcile(bot)
+    asyncio.run(bot._boot_reconcile())
+    bot.api.batch_cancel_orders.assert_not_called()
+    bot.positions.load_position.assert_not_called()
+    bot.api.batch_create_orders.assert_not_called()
+
+
+def test_boot_reconcile_cancels_orphaned_orders():
+    bot = _make_bot()
+    resting = [{"order_id": "AAA", "status": "resting"}, {"order_id": "BBB", "status": "open"}]
+    _setup_boot_reconcile(bot, open_orders=resting)
+    asyncio.run(bot._boot_reconcile())
+    bot.api.batch_cancel_orders.assert_called_once_with(["AAA", "BBB"])
+
+
+def test_boot_reconcile_loads_longs():
+    bot = _make_bot()
+    positions = [{"ticker": "M1", "position_fp": "2"}, {"ticker": "M2", "position_fp": "1"}]
+    _setup_boot_reconcile(bot, positions=positions)
+    asyncio.run(bot._boot_reconcile())
+    calls = {c.args[0]: c.args[2] for c in bot.positions.load_position.call_args_list}
+    assert calls == {"M1": 2, "M2": 1}
+    bot.api.batch_create_orders.assert_not_called()
+
+
+def test_boot_reconcile_closes_shorts():
+    bot = _make_bot()
+    positions = [{"ticker": "M_SHORT", "position_fp": "-1"}]
+    _setup_boot_reconcile(bot, positions=positions)
+    asyncio.run(bot._boot_reconcile())
+    bot.positions.load_position.assert_not_called()
+    bot.api.build_close_order.assert_called_once_with("M_SHORT", -1)
+    bot.api.batch_create_orders.assert_called_once()
+
+
+def test_boot_reconcile_handles_mixed_state():
+    bot = _make_bot()
+    orders = [{"order_id": "ORD1", "status": "resting"}]
+    positions = [
+        {"ticker": "LONG1", "position_fp": "3"},
+        {"ticker": "SHORT1", "position_fp": "-2"},
+    ]
+    _setup_boot_reconcile(bot, open_orders=orders, positions=positions)
+    asyncio.run(bot._boot_reconcile())
+    bot.api.batch_cancel_orders.assert_called_once_with(["ORD1"])
+    bot.positions.load_position.assert_called_once_with("LONG1", "yes", 3)
+    bot.api.build_close_order.assert_called_once_with("SHORT1", -1)
+
+
 def test_pending_execution_prevents_duplicate():
     """If an event is in _pending_execution, _on_orderbook_update should not fire another execution."""
     bot = _make_bot()

@@ -479,6 +479,31 @@ def test_evaluate_buy_side_respects_depth():
     assert signal is None
 
 
+def test_evaluate_buy_side_rejects_zero_ask():
+    # NO bid at 100¢ → YES ask = 0¢ — expired/certainty market, must not send 0¢ order
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={100: 100}),  # YES ask = 0¢
+        "M2": Orderbook(yes_bids={}, no_bids={72: 100}),
+        "M3": Orderbook(yes_bids={}, no_bids={72: 100}),
+    }
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is None
+
+
+def test_evaluate_buy_side_rejects_incomplete_coverage():
+    # All four legs at 1¢ ask → sum=4¢ — only a partial subset of event outcomes
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={99: 100}),  # YES ask = 1¢
+        "M2": Orderbook(yes_bids={}, no_bids={99: 100}),
+        "M3": Orderbook(yes_bids={}, no_bids={99: 100}),
+        "M4": Orderbook(yes_bids={}, no_bids={97: 100}),  # YES ask = 3¢
+    }
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is None
+
+
 # --- evaluate_two_sided tests ---
 
 def _make_two_sided_engine(min_spread_cents=6, max_inventory=10, min_volume=0.0):
