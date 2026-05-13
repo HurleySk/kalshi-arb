@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class ArbEngine:
-    def __init__(self, risk_profile: RiskProfile, maker_max_horizon_hours: float = 2.0,
+    def __init__(self, risk_profile: RiskProfile, maker_max_horizon_hours: float = 4.0,
                  max_contracts_per_arb: int = 1):
         self.min_profit_pct = risk_profile.min_profit_pct
         self.max_exposure_ratio = risk_profile.max_exposure_ratio
@@ -49,10 +49,11 @@ class ArbEngine:
             return None
 
         bid_prices = [price for _, price in legs]
+        bid_sum = sum(bid_prices)
         profit = arb_profit(bid_prices)
         if profit <= 0:
-            if sum(bid_prices) >= 0.97:
-                logger.debug("taker near-miss %s: bid_sum=%.4f", event_ticker, sum(bid_prices))
+            if 0.97 <= bid_sum < 1.00:  # below $1.00 means maker can't profit either
+                logger.debug("taker near-miss %s: bid_sum=%.4f", event_ticker, bid_sum)
             return None
 
         profit_pct = (profit / 1.0) * 100
@@ -136,10 +137,11 @@ class ArbEngine:
             return None
 
         bid_prices = [price for _, price in legs]
+        bid_sum = sum(bid_prices)
         profit = maker_arb_profit(bid_prices)
         if profit <= 0:
-            if sum(bid_prices) >= 0.95:
-                logger.debug("maker near-miss %s: bid_sum=%.4f", event_ticker, sum(bid_prices))
+            if bid_sum >= 0.95:
+                logger.debug("maker near-miss %s: bid_sum=%.4f", event_ticker, bid_sum)
             return None
 
         profit_pct = (profit / 1.0) * 100
@@ -156,7 +158,7 @@ class ArbEngine:
         if days > self.maker_max_horizon_hours / 24:
             logger.debug(
                 "maker horizon-filtered %s: bid_sum=%.4f profit_pct=%.1f%% closes_in=%.1fh horizon=%.1fh",
-                event_ticker, sum(bid_prices), profit_pct, days * 24, self.maker_max_horizon_hours,
+                event_ticker, bid_sum, profit_pct, days * 24, self.maker_max_horizon_hours,
             )
             return None
         if days > self.near_term_hours / 24:
