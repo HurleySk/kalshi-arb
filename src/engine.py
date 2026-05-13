@@ -56,7 +56,7 @@ class ArbEngine:
         if legs is None:
             return None
 
-        bid_prices = [price for _, price in legs]
+        bid_prices = [price for _, price, _ in legs]
         bid_sum = sum(bid_prices)
         profit = arb_profit(bid_prices)
         if profit <= 0:
@@ -73,12 +73,12 @@ class ArbEngine:
         if exp_ratio > self.max_exposure_ratio:
             return None
 
-        depths = [orderbooks[ticker].yes_bid_depth_at(price) for ticker, price in legs]
+        depths = [d for _, _, d in legs]
         quantity = max(1, min(int(min(depths)), self.max_contracts_per_arb))
 
         return TradeSignal(
             event_ticker=event_ticker,
-            legs=legs,
+            legs=[(t, p) for t, p, _ in legs],
             net_profit=profit,
             profit_pct=profit_pct,
             exposure_ratio=exp_ratio,
@@ -90,20 +90,21 @@ class ArbEngine:
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
         event_ticker: str | None = None,
-    ) -> list[tuple[str, float]] | None:
-        legs: list[tuple[str, float]] = []
+    ) -> list[tuple[str, float, float]] | None:
+        legs: list[tuple[str, float, float]] = []
         for ticker, book in orderbooks.items():
             best_bid = book.best_yes_bid()
             if best_bid is None:
                 return None
-            legs.append((ticker, best_bid))
+            depth = book.yes_bid_depth_at(best_bid)
+            legs.append((ticker, best_bid, depth))
 
-        bid_sum = sum(p for _, p in legs)
+        bid_sum = sum(p for _, p, _ in legs)
         near_miss = bid_sum >= 0.97  # within striking distance of taker threshold
 
         if self.min_bid_depth > 1:
-            for ticker, best_bid in legs:
-                if orderbooks[ticker].yes_bid_depth_at(best_bid) < self.min_bid_depth:
+            for ticker, best_bid, depth in legs:
+                if depth < self.min_bid_depth:
                     if near_miss and event_ticker:
                         logger.debug(
                             "near-miss %s: bid_sum=%.4f blocked — %s depth < min %d",
@@ -112,7 +113,7 @@ class ArbEngine:
                     return None
 
         if self.min_volume_24h > 0 and market_metadata:
-            for ticker, _ in legs:
+            for ticker, _, _ in legs:
                 volume = market_metadata.get(ticker, {}).get("volume_24h", 0)
                 if volume < self.min_volume_24h:
                     if near_miss and event_ticker:
@@ -123,12 +124,12 @@ class ArbEngine:
                     return None
 
         if self.min_open_interest > 0 and market_metadata:
-            for ticker, _ in legs:
+            for ticker, _, _ in legs:
                 if market_metadata.get(ticker, {}).get("open_interest", 0) < self.min_open_interest:
                     return None
 
         if self.min_liquidity > 0 and market_metadata:
-            for ticker, _ in legs:
+            for ticker, _, _ in legs:
                 if market_metadata.get(ticker, {}).get("liquidity", 0) < self.min_liquidity:
                     return None
 
@@ -144,7 +145,7 @@ class ArbEngine:
         if legs is None:
             return None
 
-        bid_prices = [price for _, price in legs]
+        bid_prices = [price for _, price, _ in legs]
         bid_sum = sum(bid_prices)
         profit = maker_arb_profit(bid_prices)
         if profit <= 0:
@@ -180,7 +181,7 @@ class ArbEngine:
 
         return TradeSignal(
             event_ticker=event_ticker,
-            legs=legs,
+            legs=[(t, p) for t, p, _ in legs],
             net_profit=profit,
             profit_pct=profit_pct,
             exposure_ratio=exp_ratio,

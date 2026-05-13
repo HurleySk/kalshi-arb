@@ -52,17 +52,17 @@ class Dispatcher:
             return None
 
         event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
-        meta = {t: self.market_metadata.get(t, {}) for t in event_books}
+        now = time.time()
 
-        signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
+        signal = self.engine.evaluate(event_ticker, event_books, market_metadata=self.market_metadata)
 
         if signal and not self.executor.is_executing():
             if self.executor.is_event_blacklisted(event_ticker):
                 return None
             last = self._last_signal_time.get(event_ticker, 0)
-            if time.time() - last < self._signal_cooldown:
+            if now - last < self._signal_cooldown:
                 return None
-            self._last_signal_time[event_ticker] = time.time()
+            self._last_signal_time[event_ticker] = now
             self._pending_execution.add(event_ticker)
             logger.info(
                 json.dumps({
@@ -80,15 +80,15 @@ class Dispatcher:
             api_total = self._event_total_markets.get(event_ticker)
             registered = self.orderbook_mgr.get_registered_market_count(event_ticker)
             buy_signal = self.engine.evaluate_buy_side(
-                event_ticker, event_books, market_metadata=meta,
+                event_ticker, event_books, market_metadata=self.market_metadata,
                 expected_market_count=api_total if api_total else registered,
             )
             if buy_signal and not self.executor.is_executing():
                 if not self.executor.is_event_blacklisted(event_ticker):
                     key = event_ticker + ":buy"
                     last = self._last_signal_time.get(key, 0)
-                    if time.time() - last >= self._signal_cooldown:
-                        self._last_signal_time[key] = time.time()
+                    if now - last >= self._signal_cooldown:
+                        self._last_signal_time[key] = now
                         self._pending_execution.add(key)
                         self._pending_execution.add(event_ticker)  # block all variants
                         logger.info(
@@ -103,13 +103,13 @@ class Dispatcher:
                         return buy_signal
 
         if not signal and self._is_near_expiry(event_ticker):
-            ne_signal = self.engine.evaluate_near_expiry(event_ticker, event_books, market_metadata=meta)
+            ne_signal = self.engine.evaluate_near_expiry(event_ticker, event_books, market_metadata=self.market_metadata)
             if ne_signal and not self.executor.is_executing():
                 if not self.executor.is_event_blacklisted(event_ticker):
                     key = event_ticker + ":ne"
                     last = self._last_signal_time.get(key, 0)
-                    if time.time() - last >= self._signal_cooldown:
-                        self._last_signal_time[key] = time.time()
+                    if now - last >= self._signal_cooldown:
+                        self._last_signal_time[key] = now
                         self._pending_execution.add(key)
                         self._pending_execution.add(event_ticker)  # block all variants
                         logger.info(json.dumps({
@@ -143,8 +143,8 @@ class Dispatcher:
                             continue
                         key = mono_signal.event_ticker + ":mono"
                         last = self._last_signal_time.get(key, 0)
-                        if time.time() - last >= self._signal_cooldown:
-                            self._last_signal_time[key] = time.time()
+                        if now - last >= self._signal_cooldown:
+                            self._last_signal_time[key] = now
                             self._pending_execution.add(key)
                             logger.info(json.dumps({
                                 "event": "monotone_arb_detected",
