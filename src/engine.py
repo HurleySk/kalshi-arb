@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from src.fees import arb_profit, exposure_ratio, maker_arb_profit, maker_exposure_ratio
+from src.fees import arb_profit, buy_side_arb_profit, exposure_ratio, maker_arb_profit, maker_exposure_ratio
 from src.models import Orderbook, TradeSignal
 from src.risk import RiskProfile
 
@@ -177,4 +177,51 @@ class ArbEngine:
             profit_pct=profit_pct,
             exposure_ratio=exp_ratio,
             signal_type="maker",
+        )
+
+    def evaluate_buy_side(
+        self,
+        event_ticker: str,
+        orderbooks: dict[str, Orderbook],
+        market_metadata: dict[str, dict] | None = None,
+    ) -> TradeSignal | None:
+        legs: list[tuple[str, float]] = []
+        for ticker, book in orderbooks.items():
+            best_ask = book.best_yes_ask()
+            if best_ask is None:
+                return None
+            legs.append((ticker, best_ask))
+
+        ask_prices = [price for _, price in legs]
+
+        if self.min_bid_depth > 1:
+            for ticker, ask_price in legs:
+                if orderbooks[ticker].yes_ask_depth_at(ask_price) < self.min_bid_depth:
+                    return None
+
+        if self.min_volume_24h > 0 and market_metadata:
+            for ticker, _ in legs:
+                if market_metadata.get(ticker, {}).get("volume_24h", 0) < self.min_volume_24h:
+                    return None
+
+        profit = buy_side_arb_profit(ask_prices)
+        if profit <= 0:
+            return None
+
+        profit_pct = (profit / 1.0) * 100
+        if profit_pct < self.min_profit_pct:
+            return None
+
+        depths = [orderbooks[ticker].yes_ask_depth_at(price) for ticker, price in legs]
+        quantity = max(1, min(int(min(depths)), self.max_contracts_per_arb))
+
+        return TradeSignal(
+            event_ticker=event_ticker,
+            legs=legs,
+            net_profit=profit,
+            profit_pct=profit_pct,
+            exposure_ratio=0.0,
+            signal_type="buy_side_taker",
+            quantity=quantity,
+            leg_actions=["buy"] * len(legs),
         )

@@ -342,3 +342,63 @@ def test_zero_thresholds_accept_all():
     }
     signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
     assert signal is not None
+
+
+# --- evaluate_buy_side tests ---
+
+def test_evaluate_buy_side_profitable():
+    # YES ask = 1 - NO bid. 3 legs: NO bids at 72¢ each → YES asks at 28¢ → sum=84¢ < $1
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={72: 100}),
+        "M2": Orderbook(yes_bids={}, no_bids={72: 100}),
+        "M3": Orderbook(yes_bids={}, no_bids={72: 100}),
+    }
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is not None
+    assert signal.signal_type == "buy_side_taker"
+    assert signal.net_profit > 0
+    assert all(a == "buy" for a in signal.leg_actions)
+
+
+def test_evaluate_buy_side_no_signal_when_sum_above_one():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={65: 100}),  # ask = 35¢
+        "M2": Orderbook(yes_bids={}, no_bids={65: 100}),
+        "M3": Orderbook(yes_bids={}, no_bids={65: 100}),  # sum = 105¢ > $1
+    }
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is None
+
+
+def test_evaluate_buy_side_returns_none_when_no_ask():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={40: 100}, no_bids={}),  # no NO bids → no ask
+        "M2": Orderbook(yes_bids={}, no_bids={72: 100}),
+    }
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is None
+
+
+def test_evaluate_buy_side_respects_min_profit_pct():
+    engine = _make_engine(min_profit_pct=50.0, max_exposure_ratio=10.0)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={72: 100}),
+        "M2": Orderbook(yes_bids={}, no_bids={72: 100}),
+        "M3": Orderbook(yes_bids={}, no_bids={72: 100}),
+    }
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is None
+
+
+def test_evaluate_buy_side_respects_depth():
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_bid_depth=50)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={}, no_bids={72: 5}),  # thin
+        "M2": Orderbook(yes_bids={}, no_bids={72: 100}),
+        "M3": Orderbook(yes_bids={}, no_bids={72: 100}),
+    }
+    signal = engine.evaluate_buy_side("E1", orderbooks)
+    assert signal is None
