@@ -27,6 +27,13 @@ def maker_exposure_ratio(bid_prices: list[float]) -> float:
     return worst_loss / net_premium
 
 
+def buy_side_arb_profit(ask_prices: list[float]) -> float:
+    """Per-contract net profit from buying all outcomes at ask prices after taker fees."""
+    gross = 1.0 - sum(ask_prices)
+    fees = sum(taker_fee(p) for p in ask_prices)
+    return gross - fees
+
+
 def exposure_ratio(bid_prices: list[float]) -> float:
     """Ratio of worst-case loss to net premium. Lower is safer."""
     premiums = sum(bid_prices)

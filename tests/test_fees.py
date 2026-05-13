@@ -74,3 +74,24 @@ def test_maker_arb_profit_below_dollar():
 def test_maker_arb_profit_three_legs():
     profit = maker_arb_profit([0.40, 0.35, 0.35])
     assert abs(profit - 0.10) < 1e-9
+
+
+from src.fees import buy_side_arb_profit
+
+
+def test_buy_side_profit_positive_when_sum_below_one():
+    # 3 legs at 30¢ each = 90¢ total, fees = 3 * 0.07 * 0.30 * 0.70 = 0.0441
+    # profit = 1.0 - 0.90 - 0.0441 = 0.0559
+    profit = buy_side_arb_profit([0.30, 0.30, 0.30])
+    assert profit > 0
+
+
+def test_buy_side_profit_negative_when_sum_above_one():
+    profit = buy_side_arb_profit([0.40, 0.40, 0.40])
+    assert profit < 0
+
+
+def test_buy_side_profit_exact():
+    asks = [0.30, 0.30, 0.30]
+    expected = 1.0 - sum(asks) - sum(taker_fee(p) for p in asks)
+    assert abs(buy_side_arb_profit(asks) - expected) < 1e-9
