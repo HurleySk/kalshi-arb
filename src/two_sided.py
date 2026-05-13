@@ -18,14 +18,15 @@ class TwoSidedManager:
 
     @property
     def total_inventory(self) -> int:
-        return sum(p["quantity"] for p in self._positions.values() if p["filled_side"])
+        return sum(p["quantity"] for p in self._positions.values())
 
     async def post(self, signal: TradeSignal) -> bool:
         ticker = signal.event_ticker
         if ticker in self._positions:
             return False
 
-        quantity = min(signal.quantity, max(1, self._max_inventory - self.total_inventory))
+        remaining = self._max_inventory - self.total_inventory
+        quantity = min(signal.quantity, remaining)
         if quantity <= 0:
             return False
 

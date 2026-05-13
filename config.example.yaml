@@ -31,6 +31,21 @@ strategy:
   # min_open_interest: 0
   # min_liquidity: 0
 
+  # Buy-side structural arb (buy all outcomes when sum(asks) < $1 - fees)
+  # enable_buy_side_arb: true
+
+  # Near-expiry stale order harvesting (relaxed taker within window of close)
+  # near_expiry_window_minutes: 30     # 0 = disabled; conservative=30, moderate=60, aggressive=120
+  # near_expiry_min_profit_pct: 1.0
+  # near_expiry_min_bid_depth: 1
+  # near_expiry_min_volume_24h: 0.0
+
+  # Two-sided market making (post bid + ask 1¢ inside NBBO, earn spread)
+  # two_sided_max_inventory: 10        # 0 = disabled; conservative=10, moderate=25, aggressive=50
+  # two_sided_min_spread_cents: 6      # conservative=6, moderate=4, aggressive=2
+  # two_sided_timeout_secs: 120        # cancel unfilled pair after this many seconds
+  # two_sided_min_volume_24h: 50.0
+
 logging:
   level: INFO
   file: logs/arb_bot.log

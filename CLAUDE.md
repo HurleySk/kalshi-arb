@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A Python asyncio bot that detects and executes arbitrage opportunities on Kalshi prediction markets. The strategy: sell "yes" on all outcomes of mutually exclusive events where the sum of best bids exceeds $1 + fees.
+A Python asyncio bot that detects and executes arbitrage opportunities on Kalshi prediction markets. Multiple strategies run concurrently: sell-side taker arb (bid sum > $1 + fees), buy-side taker arb (ask sum < $1 - fees), near-expiry harvesting, monotone constraint arb, maker arb, and two-sided spread capture.
 
 ## Commands
 
@@ -39,36 +39,53 @@ Five async components run concurrently in `ArbBot.run()` (`src/main.py`):
 
 5. **Maker Layer** (`engine.evaluate_maker` → `maker.MakerManager`) — When bid sum is between $1.00 and the taker threshold (~$1.07), posts limit orders at best bid prices as maker (0% fees). On fill, completes the arb via cancel_and_take (cancel remaining, taker-complete) or tighten_on_fill (progressively tighten prices). Reprices on orderbook updates, cancels if arb disappears.
 
+6. **Two-Sided Market Making** (`engine.evaluate_two_sided` → `two_sided.TwoSidedManager`) — Per-market spread capture. When spread ≥ `two_sided_min_spread_cents + 2`, posts limit bid and ask each 1¢ inside NBBO. On fill, cancels the opposite side and unwinds. Times out unfilled pairs after `two_sided_timeout_secs`.
+
 ### Key modules
 
-- `src/discovery.py` — `EventDiscovery`: REST scan, register events, cleanup expired
+- `src/discovery.py` — `EventDiscovery`: REST scan, register events, cleanup expired; `MonotoneFamilyRegistry`: groups threshold markets by template key
 - `src/dispatch.py` — `Dispatcher`: orderbook update routing, pending guard, fill routing
-- `src/engine.py` — `ArbEngine`: taker and maker signal evaluation
+- `src/engine.py` — `ArbEngine`: taker, maker, buy-side, near-expiry, monotone, and two-sided signal evaluation
 - `src/executor.py` — `ExecutionManager`: batch order execution, partial fill unwind
 - `src/maker.py` — `MakerManager`: limit order posting and fill handling
 - `src/scanner.py` — `MarketScanner` + `OrderbookManager`: WebSocket + orderbook state
+- `src/two_sided.py` — `TwoSidedManager`: paired bid/ask order lifecycle, inventory cap, timeout/unwind
 
 ### Data flow
 
 ```
 REST /events → EventDiscovery.register_events → OrderbookManager.register_event → WS subscribe
+               └─ MonotoneFamilyRegistry.try_register (group threshold markets)
 WS orderbook_delta → OrderbookManager.apply_snapshot/apply_delta → _ob_update_queue
   → Dispatcher.process_orderbook_update
     → ArbEngine.evaluate (taker: bid sum > $1.07) → ExecutionManager.execute
+    → ArbEngine.evaluate_buy_side (buy all outcomes: ask sum < $1 - fees) → ExecutionManager.execute
+    → ArbEngine.evaluate_near_expiry (relaxed taker within near_expiry_window_minutes) → ExecutionManager.execute
+    → ArbEngine.evaluate_monotone_pair (stacked threshold violation: sell upper, buy lower) → ExecutionManager.execute
     → ArbEngine.evaluate_maker (maker: bid sum $1.00-$1.07) → MakerManager.post
     → MakerManager.on_orderbook_update (reprice active maker orders)
-WS fill → Dispatcher.route_fill → executor.handle_fill OR maker.handle_fill
+    → ArbEngine.evaluate_two_sided (spread ≥ min_spread+2¢ per market) → TwoSidedManager.post
+WS fill → TwoSidedManager.handle_fill OR Dispatcher.route_fill → executor.handle_fill OR maker.handle_fill
 ```
 
 ### Risk Modes (`src/risk.py`)
 
 Three configurable risk profiles control all trading thresholds. Set `risk_mode` in `config.yaml`:
 
-- **conservative** (default) — min_volume_24h=50, min_bid_depth=5, min_profit_pct=2.0%, require_recent_trades=true, max_exposure_ratio=2.0
-- **moderate** — min_volume_24h=10, min_bid_depth=2, min_profit_pct=1.0%, require_recent_trades=true, max_exposure_ratio=3.0
-- **aggressive** — min_volume_24h=0, min_bid_depth=1, min_profit_pct=0.5%, require_recent_trades=false, max_exposure_ratio=5.0
+- **conservative** (default) — min_volume_24h=50, min_bid_depth=5, min_profit_pct=2.0%, require_recent_trades=true, max_exposure_ratio=2.0; near_expiry_window=30min; two_sided_max_inventory=10, spread≥6¢
+- **moderate** — min_volume_24h=10, min_bid_depth=2, min_profit_pct=1.0%, require_recent_trades=true, max_exposure_ratio=3.0; near_expiry_window=60min; two_sided_max_inventory=25, spread≥4¢
+- **aggressive** — min_volume_24h=0, min_bid_depth=1, min_profit_pct=0.5%, require_recent_trades=false, max_exposure_ratio=5.0; near_expiry_window=120min; two_sided_max_inventory=50, spread≥2¢
 
 Individual overrides in `config.yaml` take precedence over preset values.
+
+**New strategy fields** (all presets have defaults; override in `config.yaml` to customize):
+- `enable_buy_side_arb` — buy all YES outcomes when ask sum < $1 - fees (default: true)
+- `near_expiry_window_minutes` — window before close to use relaxed taker filters (0 = disabled)
+- `near_expiry_min_profit_pct`, `near_expiry_min_bid_depth`, `near_expiry_min_volume_24h` — near-expiry specific thresholds
+- `two_sided_max_inventory` — max total contracts in resting two-sided pairs (0 = disabled)
+- `two_sided_min_spread_cents` — minimum spread required to post (need spread ≥ this + 2 to post 1¢ inside each side)
+- `two_sided_timeout_secs` — cancel unfilled pairs after this many seconds
+- `two_sided_min_volume_24h` — volume floor for two-sided candidates
 
 ### Key filtering pipeline in `ArbEngine.evaluate()`
 
@@ -115,6 +132,7 @@ Near-miss signals are logged at DEBUG level (set `logging.level: DEBUG` in confi
 - `maker near-miss <event>: bid_sum=X.XXXX` — passed all filters but bid sum < $1.00
 - `near-miss <event>: bid_sum=X.XXXX blocked — <ticker> depth/volume < min` — price was in range but depth/volume filter rejected
 - `maker horizon-filtered <event>: ... closes_in=Xh horizon=Yh` — maker-profitable signal blocked by horizon cutoff
+- `monotone_arb_detected pair=<upper>|<lower>` — threshold constraint violation detected (logged at INFO)
 - STATUS line includes `maker_horizon=N` — count of events closing within `maker_max_horizon_hours` right now
 
 ## Known Limitations

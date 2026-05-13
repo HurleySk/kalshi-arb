@@ -223,7 +223,7 @@ class ArbBot:
                         for mt, book in event_books.items():
                             vol = self.discovery.market_metadata.get(mt, {}).get("volume_24h", 0.0)
                             ts_signal = self.engine.evaluate_two_sided(mt, book, volume_24h=vol)
-                            if ts_signal and not self.two_sided.owns_order(mt):
+                            if ts_signal:
                                 await self.two_sided.post(ts_signal)
                 except Exception:
                     logger.exception("Maker worker error for %s", event_ticker)
