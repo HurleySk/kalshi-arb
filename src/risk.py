@@ -16,6 +16,10 @@ class RiskProfile:
     min_open_interest: float = 0.0
     min_liquidity: float = 0.0
     enable_buy_side_arb: bool = True
+    near_expiry_window_minutes: int = 0
+    near_expiry_min_profit_pct: float = 1.0
+    near_expiry_min_bid_depth: int = 1
+    near_expiry_min_volume_24h: float = 0.0
 
 
 PRESETS: dict[str, dict] = {
@@ -30,6 +34,10 @@ PRESETS: dict[str, dict] = {
         "unwind_phase1_secs": 15,
         "unwind_phase2_secs": 30,
         "unwind_price_step_cents": 3,
+        "near_expiry_window_minutes": 30,
+        "near_expiry_min_profit_pct": 1.0,
+        "near_expiry_min_bid_depth": 1,
+        "near_expiry_min_volume_24h": 0.0,
     },
     "moderate": {
         "min_volume_24h": 10.0,
@@ -42,6 +50,10 @@ PRESETS: dict[str, dict] = {
         "unwind_phase1_secs": 30,
         "unwind_phase2_secs": 60,
         "unwind_price_step_cents": 5,
+        "near_expiry_window_minutes": 60,
+        "near_expiry_min_profit_pct": 0.5,
+        "near_expiry_min_bid_depth": 1,
+        "near_expiry_min_volume_24h": 0.0,
     },
     "aggressive": {
         "min_volume_24h": 0.0,
@@ -54,6 +66,10 @@ PRESETS: dict[str, dict] = {
         "unwind_phase1_secs": 45,
         "unwind_phase2_secs": 90,
         "unwind_price_step_cents": 8,
+        "near_expiry_window_minutes": 120,
+        "near_expiry_min_profit_pct": 0.3,
+        "near_expiry_min_bid_depth": 1,
+        "near_expiry_min_volume_24h": 0.0,
     },
 }
 

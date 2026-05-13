@@ -49,3 +49,21 @@ def test_invalid_mode_raises():
     import pytest
     with pytest.raises(ValueError, match="Invalid risk_mode"):
         load_risk_profile("yolo", {})
+
+
+def test_conservative_preset_has_near_expiry_window():
+    profile = load_risk_profile("conservative", {})
+    assert profile.near_expiry_window_minutes == 30
+    assert profile.near_expiry_min_profit_pct == 1.0
+    assert profile.near_expiry_min_bid_depth == 1
+    assert profile.near_expiry_min_volume_24h == 0.0
+
+
+def test_moderate_preset_has_wider_window():
+    profile = load_risk_profile("moderate", {})
+    assert profile.near_expiry_window_minutes == 60
+
+
+def test_aggressive_preset_has_widest_window():
+    profile = load_risk_profile("aggressive", {})
+    assert profile.near_expiry_window_minutes == 120
