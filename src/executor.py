@@ -145,56 +145,77 @@ class ExecutionManager:
             self._circuit_breaker_tripped = True
 
     async def _execute_unwind_phase(self, ticker: str, price_cents: int, qty: int,
-                                    prev_oid: str | None) -> tuple[bool, float, str]:
+                                    prev_oid: str | None, action: str = "buy") -> tuple[bool, float, str]:
         if prev_oid:
             await self.api.cancel_order(prev_oid)
-        order = [{"ticker": ticker, "action": "buy", "side": "yes",
+        order = [{"ticker": ticker, "action": action, "side": "yes",
                   "type": "limit", "yes_price": price_cents, "count": qty}]
         resp = await self.api.batch_create_orders(order)
         inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
         status = inner.get("status", "")
-        buy_price = float(inner.get("yes_price_dollars", 0))
+        unwind_price = float(inner.get("yes_price_dollars", 0))
         oid = inner.get("order_id", "")
-        return status == "executed", buy_price, oid
+        return status == "executed", unwind_price, oid
 
     async def _unwind_partial_fill(self, execution: ArbExecution):
-        filled_tickers = []
-        for o in execution.batch_response:
+        signal = execution.signal
+        filled_legs = []
+        for i, o in enumerate(execution.batch_response):
             inner = self.api.unwrap_order(o)
             if inner.get("order_id") in execution.filled:
-                filled_tickers.append((
+                original_action = (
+                    signal.leg_actions[i] if signal.leg_actions and i < len(signal.leg_actions) else "sell"
+                )
+                unwind_action = "sell" if original_action == "buy" else "buy"
+                filled_legs.append((
                     inner.get("ticker", ""),
                     float(inner.get("yes_price_dollars", 0)),
                     int(float(inner.get("fill_count_fp", 0))),
+                    unwind_action,
                 ))
 
         step = self._unwind_price_step_cents / 100.0
-        phases = [
-            (lambda fp: min(fp + step, 0.99), 0),
-            (lambda fp: min(fp + 2 * step, 0.99), self._unwind_phase1_secs),
-            (lambda _: 0.99, self._unwind_phase2_secs - self._unwind_phase1_secs),
-        ]
 
-        for ticker, fill_price, qty in filled_tickers:
+        for ticker, fill_price, qty, unwind_action in filled_legs:
             if qty <= 0:
                 continue
             logger.warning("Unwinding %d contracts of %s (filled @ %.2f)", qty, ticker, fill_price)
+            if unwind_action == "buy":  # closing a short (original leg was a sell)
+                phases = [
+                    (lambda fp, s=step: min(fp + s, 0.99), 0),
+                    (lambda fp, s=step: min(fp + 2 * s, 0.99), self._unwind_phase1_secs),
+                    (lambda fp: 0.99, self._unwind_phase2_secs - self._unwind_phase1_secs),
+                ]
+                fallback = 0.99
+            else:  # closing a long (original leg was a buy)
+                phases = [
+                    (lambda fp, s=step: max(fp - s, 0.01), 0),
+                    (lambda fp, s=step: max(fp - 2 * s, 0.01), self._unwind_phase1_secs),
+                    (lambda fp: 0.01, self._unwind_phase2_secs - self._unwind_phase1_secs),
+                ]
+                fallback = 0.01
+
             prev_oid = None
-            for i, (price_fn, wait_secs) in enumerate(phases, 1):
+            filled = False
+            unwind_price = fallback
+            for phase_i, (price_fn, wait_secs) in enumerate(phases, 1):
                 if wait_secs > 0:
                     await asyncio.sleep(wait_secs)
                 price = price_fn(fill_price)
-                filled, buy_price, prev_oid = await self._execute_unwind_phase(
-                    ticker, round(price * 100), qty, prev_oid)
+                filled, unwind_price, prev_oid = await self._execute_unwind_phase(
+                    ticker, round(price * 100), qty, prev_oid, unwind_action)
                 if filled:
-                    self._record_unwind_loss(ticker, fill_price, buy_price, qty)
-                    logger.info("Unwind phase %d filled for %s @ %.2f", i, ticker, price)
+                    logger.info("Unwind phase %d filled for %s @ %.2f", phase_i, ticker, price)
                     break
+
+            # loss = what we paid − what we recovered (direction-agnostic)
+            if unwind_action == "buy":
+                self._record_unwind_loss(ticker, fill_price, unwind_price, qty)
             else:
-                if not filled:
-                    self._record_unwind_loss(ticker, fill_price, 0.99, qty)
-                    logger.error("Unwind phase 3 STILL RESTING for %s — loss estimated", ticker)
-                logger.warning("Unwind phase 3 for %s: status @ $0.99", ticker)
+                self._record_unwind_loss(ticker, unwind_price, fill_price, qty)
+            if not filled:
+                logger.error("Unwind phase 3 STILL RESTING for %s — loss estimated", ticker)
+            logger.warning("Unwind complete for %s: final @ $%.2f", ticker, unwind_price)
 
     def handle_fill(self, fill_data: dict):
         logger.info("WS fill event: %s", fill_data)

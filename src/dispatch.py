@@ -84,6 +84,7 @@ class Dispatcher:
                                 "event_ticker": event_ticker,
                                 "legs": buy_signal.legs,
                                 "net_profit": round(buy_signal.net_profit, 6),
+                                "profit_pct": round(buy_signal.profit_pct, 2),
                             })
                         )
                         return buy_signal

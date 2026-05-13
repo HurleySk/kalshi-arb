@@ -204,6 +204,16 @@ class ArbEngine:
                 if market_metadata.get(ticker, {}).get("volume_24h", 0) < self.min_volume_24h:
                     return None
 
+        if self.min_open_interest > 0 and market_metadata:
+            for ticker, _ in legs:
+                if market_metadata.get(ticker, {}).get("open_interest", 0) < self.min_open_interest:
+                    return None
+
+        if self.min_liquidity > 0 and market_metadata:
+            for ticker, _ in legs:
+                if market_metadata.get(ticker, {}).get("liquidity", 0) < self.min_liquidity:
+                    return None
+
         profit = buy_side_arb_profit(ask_prices)
         if profit <= 0:
             return None
