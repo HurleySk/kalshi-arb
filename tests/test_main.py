@@ -54,7 +54,7 @@ def test_pending_execution_prevents_duplicate():
     bot.orderbook_mgr.apply_snapshot("M3", {"yes_dollars_fp": [["0.3500", "100"]], "no_dollars_fp": []})
 
     # Simulate: event already pending execution
-    bot._pending_execution.add("E1")
+    bot.dispatcher._pending_execution.add("E1")
 
     bot._on_orderbook_update("M1")
 

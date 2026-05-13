@@ -10,6 +10,7 @@ from pathlib import Path
 from src.auth import KalshiAuth
 from src.api import KalshiAPI
 from src.config import load_config
+from src.dispatch import Dispatcher
 from src.engine import ArbEngine
 from src.executor import ExecutionManager
 from src.positions import PositionTracker
@@ -53,6 +54,15 @@ class ArbBot:
             tighten_phase2_secs=self.risk_profile.unwind_phase2_secs,
             tighten_step_cents=self.risk_profile.unwind_price_step_cents,
         ) if self.cfg.maker_enabled else None
+        self._event_tickers: set[str] = set()
+        self._market_metadata: dict[str, dict] = {}
+        self.dispatcher = Dispatcher(
+            engine=self.engine,
+            executor=self.executor,
+            maker=self.maker,
+            orderbook_mgr=self.orderbook_mgr,
+            market_metadata=self._market_metadata,
+        )
         self.scanner = MarketScanner(
             ws_url=self.cfg.ws_url,
             auth=self.auth,
@@ -60,11 +70,6 @@ class ArbBot:
             on_orderbook_update=self._on_orderbook_update,
             on_fill=self._on_fill,
         )
-        self._event_tickers: set[str] = set()
-        self._market_metadata: dict[str, dict] = {}
-        self._last_signal_time: dict[str, float] = {}
-        self._signal_cooldown = 60.0
-        self._pending_execution: set[str] = set()
         self._ob_update_queue: asyncio.Queue[str] = asyncio.Queue()
         self._maker_queue: asyncio.Queue | None = None
         self._maker_dirty_events: set[str] = set()
@@ -103,8 +108,8 @@ class ArbBot:
         root.addHandler(console)
 
     def _on_fill(self, fill_data: dict):
-        order_id = fill_data.get("order_id", "")
-        if self.maker and self.maker.owns_order(order_id):
+        if self.dispatcher.route_fill(fill_data) == "maker":
+            order_id = fill_data.get("order_id", "")
             ticker = fill_data.get("market_ticker", "")
             price = float(fill_data.get("yes_price_dollars", 0))
             quantity = int(float(fill_data.get("count_fp", 0)))
@@ -112,8 +117,6 @@ class ArbBot:
                 asyncio.create_task(
                     self.maker.handle_fill(order_id, ticker, price, quantity)
                 )
-        else:
-            self.executor.handle_fill(fill_data)
 
     def _on_orderbook_update(self, market_ticker: str):
         try:
@@ -124,53 +127,23 @@ class ArbBot:
     async def _process_orderbook_updates(self):
         while True:
             market_ticker = await self._ob_update_queue.get()
-            event_ticker = self.orderbook_mgr.get_event_for_market(market_ticker)
-            if not event_ticker:
-                continue
+            signal = self.dispatcher.process_orderbook_update(market_ticker)
 
-            if self.executor.is_circuit_breaker_tripped():
-                continue
-
-            if event_ticker in self._pending_execution:
-                continue
-
-            event_books = self.orderbook_mgr.get_event_orderbooks(event_ticker)
-            meta = {t: self._market_metadata.get(t, {}) for t in event_books}
-
-            signal = self.engine.evaluate(event_ticker, event_books, market_metadata=meta)
-
-            if signal and not self.executor.is_executing():
-                if self.executor.is_event_blacklisted(event_ticker):
-                    continue
-                if self.maker and self.maker.is_event_active(event_ticker):
-                    asyncio.create_task(self.maker.cancel_event(event_ticker))
-                last = self._last_signal_time.get(event_ticker, 0)
-                if time.time() - last < self._signal_cooldown:
-                    continue
-                self._last_signal_time[event_ticker] = time.time()
+            if signal:
+                if self.maker and self.maker.is_event_active(signal.event_ticker):
+                    asyncio.create_task(self.maker.cancel_event(signal.event_ticker))
                 self._stats["arbs_detected"] += 1
                 self._stats["total_theoretical_profit"] += signal.net_profit
-                logger.info(
-                    json.dumps({
-                        "event": "arb_detected",
-                        "event_ticker": event_ticker,
-                        "legs": signal.legs,
-                        "net_profit": round(signal.net_profit, 6),
-                        "profit_pct": round(signal.profit_pct, 2),
-                        "exposure_ratio": round(signal.exposure_ratio, 2),
-                    })
-                )
-                self._pending_execution.add(event_ticker)
                 asyncio.create_task(self._execute_and_track(signal))
                 continue
 
-            if self.maker and not signal:
-                self._maker_dirty_events.add(event_ticker)
-                if self._maker_queue and not self._maker_queue.full():
-                    try:
-                        self._maker_queue.put_nowait(True)
-                    except asyncio.QueueFull:
-                        pass
+            dirty = self.dispatcher.consume_dirty_events()
+            if dirty and self._maker_queue:
+                self._maker_dirty_events.update(dirty)
+                try:
+                    self._maker_queue.put_nowait(True)
+                except asyncio.QueueFull:
+                    pass
 
     async def _validate_recent_trades(self, tickers: list[str]) -> bool:
         if not self.risk_profile.require_recent_trades:
@@ -247,7 +220,7 @@ class ArbBot:
             logger.exception("Failed to execute arb for %s", signal.event_ticker)
             self._stats["arbs_failed"] += 1
         finally:
-            self._pending_execution.discard(signal.event_ticker)
+            self.dispatcher.mark_execution_complete(signal.event_ticker)
 
     async def _emergency_shutdown(self):
         logger.critical(
