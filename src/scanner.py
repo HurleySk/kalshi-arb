@@ -88,14 +88,36 @@ class MarketScanner:
         self._ws = None
         self._sub_id = 0
         self._running = False
+        self._stopping = False
+        self._subscribed_tickers: set[str] = set()
+        self._fills_subscribed = False
 
     async def connect(self):
-        headers = self.auth.build_headers("GET", "/trade-api/ws/v2")
-        self._ws = await websockets.connect(self.ws_url, additional_headers=headers)
-        self._running = True
-        logger.info("WebSocket connected")
+        delay = 5
+        attempt = 0
+        while not self._stopping:
+            attempt += 1
+            try:
+                headers = self.auth.build_headers("GET", "/trade-api/ws/v2")
+                self._ws = await websockets.connect(self.ws_url, additional_headers=headers)
+                self._running = True
+                if attempt > 1:
+                    logger.info("WebSocket connected after %d attempts", attempt)
+                else:
+                    logger.info("WebSocket connected")
+                return
+            except Exception as e:
+                if self._stopping:
+                    return
+                logger.warning(
+                    "WebSocket connect attempt %d failed (%s). Retrying in %ds",
+                    attempt, e, delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60)
 
     async def subscribe(self, market_tickers: list[str], chunk_size: int = 500):
+        self._subscribed_tickers.update(market_tickers)
         if not self._ws:
             return
         for i in range(0, len(market_tickers), chunk_size):
@@ -122,7 +144,19 @@ class MarketScanner:
             "params": {"channels": ["fill"]},
         }
         await self._ws.send(json.dumps(msg))
+        self._fills_subscribed = True
         logger.info("Subscribed to fill channel")
+
+    async def _reconnect(self):
+        logger.info("Reconnecting to WebSocket...")
+        self._ws = None
+        await self.connect()
+        if self._stopping:
+            return
+        if self._fills_subscribed:
+            await self.subscribe_fills()
+        if self._subscribed_tickers:
+            await self.subscribe(list(self._subscribed_tickers))
 
     async def listen(self):
         if not self._ws:
@@ -151,12 +185,13 @@ class MarketScanner:
 
             except websockets.ConnectionClosed:
                 logger.warning("WebSocket disconnected")
-                self._running = False
-                break
+                await self._reconnect()
+
             except Exception:
                 logger.exception("Error processing WebSocket message")
 
     async def close(self):
+        self._stopping = True
         self._running = False
         if self._ws:
             await self._ws.close()

@@ -98,8 +98,27 @@ class MakerManager:
                     event.order_prices[ticker] = price
                     self._order_to_event[oid] = signal.event_ticker
 
-                if not event.order_ids:
+                n_created = len(event.order_ids)
+                n_expected = len(orders)
+
+                if n_created == 0:
                     logger.warning("No orders created for %s", signal.event_ticker)
+                    self._completed[signal.event_ticker] = time.time()
+                    return False
+
+                if n_created < n_expected:
+                    logger.warning(
+                        "Partial orders for %s (%d/%d legs), cancelling",
+                        signal.event_ticker, n_created, n_expected,
+                    )
+                    orphan_ids = list(event.order_ids.values())
+                    for oid in orphan_ids:
+                        self._order_to_event.pop(oid, None)
+                    try:
+                        await self.api.batch_cancel_orders(orphan_ids)
+                    except Exception:
+                        logger.exception("Failed to cancel partial orders on %s", signal.event_ticker)
+                    self._completed[signal.event_ticker] = time.time()
                     return False
 
                 self._active[signal.event_ticker] = event

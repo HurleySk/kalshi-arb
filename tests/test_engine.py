@@ -23,7 +23,10 @@ def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0, **kwargs):
         unwind_phase2_secs=30,
         unwind_price_step_cents=3,
     )
-    return ArbEngine(risk_profile=profile)
+    return ArbEngine(
+        risk_profile=profile,
+        maker_max_horizon_hours=kwargs.get("maker_max_horizon_hours", 1.0),
+    )
 
 
 def _future_iso(days: float) -> str:
@@ -138,8 +141,16 @@ def test_aggressive_mode_allows_zero_volume():
 
 
 def _near_meta(*tickers):
-    close = _future_iso(0.5)
+    close = _future_iso(1 / 24)  # 1 hour out — within default 2h maker horizon
     return {t: {"close_time": close, "volume_24h": 500} for t in tickers}
+
+
+def test_evaluate_maker_rejects_beyond_horizon():
+    """Events closing in 6 hours are rejected when maker_max_horizon_hours=2."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0)
+    meta = {t: {"close_time": _future_iso(6 / 24), "volume_24h": 500} for t in ["M1", "M2", "M3"]}
+    orderbooks = {"M1": _ob([(0.35, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    assert engine.evaluate_maker("E1", orderbooks, market_metadata=meta) is None
 
 
 def test_evaluate_maker_signal_in_fee_gap():

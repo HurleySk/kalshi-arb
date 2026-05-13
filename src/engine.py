@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class ArbEngine:
-    def __init__(self, risk_profile: RiskProfile):
+    def __init__(self, risk_profile: RiskProfile, maker_max_horizon_hours: float = 2.0):
         self.min_profit_pct = risk_profile.min_profit_pct
         self.max_exposure_ratio = risk_profile.max_exposure_ratio
         self.near_term_hours = risk_profile.near_term_hours
@@ -17,6 +17,7 @@ class ArbEngine:
         self.min_bid_depth = risk_profile.min_bid_depth
         self.min_volume_24h = risk_profile.min_volume_24h
         self.maker_max_exposure_ratio = 50.0
+        self.maker_max_horizon_hours = maker_max_horizon_hours
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -109,11 +110,13 @@ class ArbEngine:
         if profit_pct < self.min_profit_pct:
             return None
 
-        # Maker ties up capital — require known expiry and apply hurdle rate
+        # Maker ties up capital — require known expiry within horizon
         if not market_metadata:
             return None
         days = self._days_to_expiry(market_metadata)
         if days is None:
+            return None
+        if days > self.maker_max_horizon_hours / 24:
             return None
         if days > self.near_term_hours / 24:
             annualized = profit_pct * (365 / days)

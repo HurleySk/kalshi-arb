@@ -31,7 +31,10 @@ class ArbBot:
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
 
-        self.engine = ArbEngine(risk_profile=self.risk_profile)
+        self.engine = ArbEngine(
+            risk_profile=self.risk_profile,
+            maker_max_horizon_hours=self.cfg.maker_max_horizon_hours,
+        )
         self.positions = PositionTracker()
         self.executor = ExecutionManager(
             api=self.api,
@@ -361,12 +364,37 @@ class ArbBot:
             except Exception:
                 logger.exception("Error during event re-poll")
 
+    async def _close_inherited_positions(self):
+        """Close any short positions from previous sessions before trading begins."""
+        try:
+            resp = await self.api.get_positions()
+            shorts = [
+                p["ticker"]
+                for p in resp.get("market_positions", [])
+                if float(p.get("position_fp", 0)) < 0
+            ]
+            if not shorts:
+                return
+            logger.warning("Found %d inherited short position(s) — closing before trading", len(shorts))
+            for ticker in shorts:
+                order = self.api.build_close_order(ticker, -1)
+                try:
+                    result = await self.api.batch_create_orders([order])
+                    inner = self.api.unwrap_order(result.get("orders", [{}])[0])
+                    logger.info("Closed inherited short: %s status=%s", ticker, inner.get("status", "?"))
+                except Exception:
+                    logger.exception("Failed to close inherited short: %s", ticker)
+                await asyncio.sleep(0.15)
+        except Exception:
+            logger.exception("Error closing inherited positions")
+
     async def run(self):
         self._setup_logging()
         self._stats["started_at"] = time.time()
         logger.info("Starting Kalshi Arb Bot in %s mode (risk: %s)",
                      self.cfg.mode.upper(), self.cfg.risk_mode)
 
+        await self._close_inherited_positions()
         await self.scanner.connect()
         await self.scanner.subscribe_fills()
 

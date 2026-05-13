@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "kalshi-arb": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["-m", "src.mcp_server"],
+      "cwd": "/home/pi/source/kalshi-arb"
+    }
+  }
+}

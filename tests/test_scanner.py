@@ -1,4 +1,96 @@
-from src.scanner import OrderbookManager
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch, call
+import websockets
+
+from src.scanner import OrderbookManager, MarketScanner
+
+
+# ── MarketScanner.connect() retry tests ──────────────────────────────────────
+
+def _make_scanner():
+    auth = MagicMock()
+    auth.build_headers.return_value = {}
+    return MarketScanner(
+        ws_url="wss://fake",
+        auth=auth,
+        orderbook_mgr=OrderbookManager(),
+    )
+
+
+def test_connect_retries_on_failure():
+    """connect() retries until it succeeds, returning on first success."""
+    scanner = _make_scanner()
+    fake_ws = MagicMock()
+
+    connect_calls = 0
+    async def fake_connect(url, additional_headers):
+        nonlocal connect_calls
+        connect_calls += 1
+        if connect_calls < 3:
+            raise OSError("connection refused")
+        return fake_ws
+
+    async def run():
+        with patch("websockets.connect", side_effect=fake_connect):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                await scanner.connect()
+
+    asyncio.run(run())
+    assert connect_calls == 3
+    assert scanner._ws is fake_ws
+    assert scanner._running is True
+
+
+def test_connect_stops_when_stopping():
+    """connect() exits without connecting when _stopping is set."""
+    scanner = _make_scanner()
+    scanner._stopping = True
+
+    async def run():
+        with patch("websockets.connect", new_callable=AsyncMock) as mock_ws:
+            await scanner.connect()
+            mock_ws.assert_not_called()
+
+    asyncio.run(run())
+    assert scanner._ws is None
+    assert scanner._running is False
+
+
+def test_subscribe_tracks_tickers_when_disconnected():
+    """subscribe() records tickers even when _ws is None (reconnect will use them)."""
+    scanner = _make_scanner()
+    assert scanner._ws is None
+
+    asyncio.run(scanner.subscribe(["M1", "M2", "M3"]))
+
+    assert scanner._subscribed_tickers == {"M1", "M2", "M3"}
+
+
+def test_reconnect_resubscribes_all_channels():
+    """_reconnect() calls connect(), subscribe_fills(), and subscribe() with all known tickers."""
+    scanner = _make_scanner()
+    scanner._subscribed_tickers = {"M1", "M2"}
+    scanner._fills_subscribed = True
+
+    connect_mock = AsyncMock()
+    subscribe_mock = AsyncMock()
+    subscribe_fills_mock = AsyncMock()
+
+    async def fake_connect():
+        scanner._ws = MagicMock()
+        scanner._running = True
+
+    async def run():
+        with patch.object(scanner, "connect", side_effect=fake_connect):
+            with patch.object(scanner, "subscribe", subscribe_mock):
+                with patch.object(scanner, "subscribe_fills", subscribe_fills_mock):
+                    await scanner._reconnect()
+
+    asyncio.run(run())
+    subscribe_fills_mock.assert_called_once()
+    subscribe_mock.assert_called_once()
+    called_tickers = set(subscribe_mock.call_args[0][0])
+    assert called_tickers == {"M1", "M2"}
 
 
 def test_apply_snapshot():
