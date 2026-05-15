@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -130,7 +131,11 @@ class ArbBot:
                     d["exception"] = self.formatException(record.exc_info)
                 return json.dumps(d)
 
-        handler = logging.FileHandler(self.cfg.log_file)
+        handler = logging.handlers.RotatingFileHandler(
+            self.cfg.log_file,
+            maxBytes=self.cfg.log_max_file_size_mb * 1024 * 1024,
+            backupCount=self.cfg.log_max_backup_count,
+        )
         handler.setFormatter(JsonFormatter())
         console = logging.StreamHandler()
         console.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
