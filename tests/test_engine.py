@@ -885,3 +885,73 @@ def test_monotone_no_profit():
     lower = CoreOB(bids={50: 10.0}, asks={45: 15.0})
     signal = mono_evaluate("T-UPPER", upper, "T-LOWER", lower, fm)
     assert signal is None
+
+
+# --- Core Engine coordinator tests ---
+
+
+def test_core_engine_delegates_to_taker():
+    from src.core.models import Orderbook as CoreOB
+    from src.core.risk import load_risk_profile
+    from src.core.engine import ArbEngine as CoreEngine
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    from datetime import datetime, timezone, timedelta
+
+    fm = KalshiFeeModel()
+    rp = load_risk_profile("aggressive", {})
+    engine = CoreEngine(fee_model=fm, risk_profile=rp)
+    close = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    books = {
+        "T-1": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
+        "T-2": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
+        "T-3": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
+    }
+    meta = {
+        "T-1": {"close_time": close, "volume_24h": 100},
+        "T-2": {"close_time": close, "volume_24h": 100},
+        "T-3": {"close_time": close, "volume_24h": 100},
+    }
+    signal = engine.evaluate(event_ticker="E-1", orderbooks=books, market_metadata=meta)
+    assert signal is not None
+    assert signal.signal_type == "taker"
+
+
+def test_core_engine_maker_signal():
+    from src.core.models import Orderbook as CoreOB
+    from src.core.risk import load_risk_profile
+    from src.core.engine import ArbEngine as CoreEngine
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+
+    fm = KalshiFeeModel()
+    rp = load_risk_profile("aggressive", {})
+    engine = CoreEngine(fee_model=fm, risk_profile=rp)
+    books = {
+        "T-1": CoreOB(bids={35: 10.0}, asks={37: 5.0}),
+        "T-2": CoreOB(bids={35: 10.0}, asks={37: 5.0}),
+        "T-3": CoreOB(bids={35: 10.0}, asks={37: 5.0}),
+    }
+    meta = {
+        "T-1": {"volume_24h": 100},
+        "T-2": {"volume_24h": 100},
+        "T-3": {"volume_24h": 100},
+    }
+    signal = engine.evaluate_maker(event_ticker="E-1", orderbooks=books, market_metadata=meta)
+    assert signal is not None
+    assert signal.signal_type == "maker"
+
+
+def test_core_engine_two_sided_signal():
+    from src.core.models import Orderbook as CoreOB
+    from src.core.risk import load_risk_profile
+    from src.core.engine import ArbEngine as CoreEngine
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+
+    fm = KalshiFeeModel()
+    rp = load_risk_profile("aggressive", {})
+    engine = CoreEngine(fee_model=fm, risk_profile=rp)
+    # Wide spread: bid=40, ask=50 → spread=10¢, aggressive min=2+2=4
+    book = CoreOB(bids={40: 10.0}, asks={50: 10.0})
+    signal = engine.evaluate_two_sided("T-1", book, volume_24h=100)
+    assert signal is not None
+    assert signal.signal_type == "two_sided"
+    assert signal.leg_actions == ["buy", "sell"]
