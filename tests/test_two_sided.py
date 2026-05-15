@@ -1,6 +1,6 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
-from src.two_sided import TwoSidedManager
+from src.strategies.two_sided import TwoSidedManager
 from src.risk import load_risk_profile
 from src.models import TradeSignal
 
@@ -11,8 +11,6 @@ def _make_manager(timeout_secs=5, max_inventory=10):
         "two_sided_max_inventory": max_inventory,
     })
     api = MagicMock()
-    api.build_buy_order.return_value = {"action": "buy"}
-    api.build_sell_order.return_value = {"action": "sell"}
     api.batch_create_orders = AsyncMock(return_value={
         "orders": [
             {"order": {"order_id": "BUY1", "status": "resting"}},
@@ -20,7 +18,10 @@ def _make_manager(timeout_secs=5, max_inventory=10):
         ]
     })
     api.cancel_order = AsyncMock(return_value={})
-    return TwoSidedManager(api=api, risk_profile=profile), api
+    order_builder = MagicMock()
+    order_builder.build_buy_order = MagicMock(return_value={"action": "buy"})
+    order_builder.build_sell_order = MagicMock(return_value={"action": "sell"})
+    return TwoSidedManager(api=api, risk_profile=profile, order_builder=order_builder), api, order_builder
 
 
 def _signal(ticker="M1", quantity=1):
@@ -32,14 +33,14 @@ def _signal(ticker="M1", quantity=1):
 
 
 def test_post_places_both_orders():
-    manager, api = _make_manager()
+    manager, api, order_builder = _make_manager()
     posted = asyncio.run(manager.post(_signal()))
     assert posted
     assert api.batch_create_orders.called
 
 
 def test_post_tracks_position():
-    manager, api = _make_manager()
+    manager, api, order_builder = _make_manager()
     asyncio.run(manager.post(_signal("M1")))
     assert "M1" in manager._positions
     pos = manager._positions["M1"]
@@ -49,7 +50,7 @@ def test_post_tracks_position():
 
 
 def test_post_rejects_duplicate_ticker():
-    manager, api = _make_manager()
+    manager, api, order_builder = _make_manager()
     asyncio.run(manager.post(_signal("M1")))
     posted2 = asyncio.run(manager.post(_signal("M1")))
     assert not posted2
@@ -57,14 +58,14 @@ def test_post_rejects_duplicate_ticker():
 
 
 def test_inventory_cap_prevents_over_posting():
-    manager, api = _make_manager(max_inventory=2)
+    manager, api, order_builder = _make_manager(max_inventory=2)
     posted = asyncio.run(manager.post(_signal(quantity=5)))
     assert posted
     assert manager._positions["M1"]["quantity"] == 2
 
 
 def test_cancel_unfilled_on_timeout():
-    manager, api = _make_manager(timeout_secs=1)
+    manager, api, order_builder = _make_manager(timeout_secs=1)
     manager._positions["M1"] = {
         "buy_id": "BUY1", "sell_id": "SELL1",
         "filled_side": None, "quantity": 1, "posted_at": 0,
@@ -75,7 +76,7 @@ def test_cancel_unfilled_on_timeout():
 
 
 def test_timeout_does_not_cancel_filled_positions():
-    manager, api = _make_manager(timeout_secs=1)
+    manager, api, order_builder = _make_manager(timeout_secs=1)
     manager._positions["M1"] = {
         "buy_id": "BUY1", "sell_id": "SELL1",
         "filled_side": "buy", "quantity": 1, "posted_at": 0,
@@ -85,7 +86,7 @@ def test_timeout_does_not_cancel_filled_positions():
 
 
 def test_owns_order_returns_true_for_known_ids():
-    manager, _ = _make_manager()
+    manager, _, order_builder = _make_manager()
     manager._positions["M1"] = {
         "buy_id": "BUY1", "sell_id": "SELL1",
         "filled_side": None, "quantity": 1, "posted_at": 0,

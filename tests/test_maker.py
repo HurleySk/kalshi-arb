@@ -1,18 +1,13 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from src.maker import MakerManager
+from src.strategies.maker import MakerManager
 from src.models import TradeSignal, Orderbook
 from src.risk import load_risk_profile
 
 
 def _make_maker(max_events=3, fill_mode="cancel_and_take"):
     api = MagicMock()
-    api.unwrap_order = lambda raw: raw.get("order", raw)
-    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
-        "ticker": ticker, "action": "sell", "side": "yes",
-        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
-    })
     api.batch_create_orders = AsyncMock(return_value={
         "orders": [
             {"order": {"order_id": "mo1", "ticker": "M1", "status": "resting",
@@ -23,8 +18,14 @@ def _make_maker(max_events=3, fill_mode="cancel_and_take"):
     })
     api.batch_cancel_orders = AsyncMock(return_value={})
     api.cancel_order = AsyncMock(return_value={})
-    maker = MakerManager(api=api, fill_mode=fill_mode, max_events=max_events)
-    return maker, api
+    order_builder = MagicMock()
+    order_builder.unwrap_order = MagicMock(side_effect=lambda raw: raw.get("order", raw))
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, price, quantity: {
+        "ticker": ticker, "action": "sell", "side": "yes",
+        "type": "limit", "yes_price": round(price * 100), "count": quantity,
+    })
+    maker = MakerManager(api=api, order_builder=order_builder, fill_mode=fill_mode, max_events=max_events)
+    return maker, api, order_builder
 
 
 def _maker_signal():
@@ -37,7 +38,7 @@ def _maker_signal():
 
 
 def test_post_maker_orders():
-    maker, api = _make_maker()
+    maker, api, order_builder = _make_maker()
     signal = _maker_signal()
     asyncio.run(maker.post(signal))
 
@@ -49,7 +50,7 @@ def test_post_maker_orders():
 
 
 def test_max_events_respected():
-    maker, api = _make_maker(max_events=1)
+    maker, api, order_builder = _make_maker(max_events=1)
     s1 = _maker_signal()
     s2 = TradeSignal(
         event_ticker="E2",
@@ -65,7 +66,7 @@ def test_max_events_respected():
 
 
 def test_no_duplicate_posts():
-    maker, api = _make_maker()
+    maker, api, order_builder = _make_maker()
     signal = _maker_signal()
     asyncio.run(maker.post(signal))
     asyncio.run(maker.post(signal))
@@ -74,7 +75,7 @@ def test_no_duplicate_posts():
 
 
 def test_cancel_all():
-    maker, api = _make_maker()
+    maker, api, order_builder = _make_maker()
     signal = _maker_signal()
     asyncio.run(maker.post(signal))
     asyncio.run(maker.cancel_all())
@@ -84,7 +85,7 @@ def test_cancel_all():
 
 
 def test_owns_order():
-    maker, _ = _make_maker()
+    maker, _, order_builder = _make_maker()
     signal = _maker_signal()
     asyncio.run(maker.post(signal))
 
@@ -94,7 +95,7 @@ def test_owns_order():
 
 
 def test_handle_fill_cancel_and_take():
-    maker, api = _make_maker(fill_mode="cancel_and_take")
+    maker, api, order_builder = _make_maker(fill_mode="cancel_and_take")
     signal = _maker_signal()
     asyncio.run(maker.post(signal))
 
@@ -112,7 +113,7 @@ def test_handle_fill_cancel_and_take():
 
 
 def test_handle_fill_unknown_order_ignored():
-    maker, api = _make_maker()
+    maker, api, order_builder = _make_maker()
     asyncio.run(
         maker.handle_fill("unknown", "M1", 0.52, 1)
     )
@@ -121,7 +122,7 @@ def test_handle_fill_unknown_order_ignored():
 
 def test_handle_fill_tighten_on_fill():
     """tighten_on_fill: reprices remaining legs instead of crossing spread immediately."""
-    maker, api = _make_maker(fill_mode="tighten_on_fill")
+    maker, api, order_builder = _make_maker(fill_mode="tighten_on_fill")
     maker._tighten_phase1_secs = 0
     maker._tighten_phase2_secs = 0
     maker._tighten_step_cents = 3
@@ -138,7 +139,7 @@ def test_handle_fill_tighten_on_fill():
 
 
 def test_reprice_on_bid_change():
-    maker, api = _make_maker()
+    maker, api, order_builder = _make_maker()
     signal = _maker_signal()
     asyncio.run(maker.post(signal))
 
@@ -154,7 +155,7 @@ def test_reprice_on_bid_change():
 
 
 def test_invalidate_when_arb_dies():
-    maker, api = _make_maker()
+    maker, api, order_builder = _make_maker()
     signal = _maker_signal()
     asyncio.run(maker.post(signal))
 
@@ -171,7 +172,7 @@ def test_invalidate_when_arb_dies():
 
 
 def test_reprice_throttled():
-    maker, api = _make_maker()
+    maker, api, order_builder = _make_maker()
     signal = _maker_signal()
     asyncio.run(maker.post(signal))
 
@@ -189,8 +190,9 @@ def test_reprice_throttled():
 def test_maker_accepts_risk_profile():
     profile = load_risk_profile("conservative", {})
     api = MagicMock()
-    api.unwrap_order = lambda raw: raw.get("order", raw)
-    maker = MakerManager(api=api, risk_profile=profile)
+    order_builder = MagicMock()
+    order_builder.unwrap_order = lambda raw: raw.get("order", raw)
+    maker = MakerManager(api=api, order_builder=order_builder, risk_profile=profile)
     assert maker._tighten_phase1_secs == profile.unwind_phase1_secs
     assert maker._tighten_phase2_secs == profile.unwind_phase2_secs
     assert maker._tighten_step_cents == profile.unwind_price_step_cents
