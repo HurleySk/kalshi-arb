@@ -33,6 +33,18 @@ class ArbEngine:
         self.min_buy_side_coverage = risk_profile.min_buy_side_coverage
         self.maker_min_volume_24h = risk_profile.maker_min_volume_24h
 
+    def _record_near_miss(self, event_ticker: str, strategy: str, bid_sum: float,
+                          legs: list[tuple[str, float, float]], reject_reason: str | None = None):
+        if not self.recorder:
+            return
+        self.recorder.record_signal(
+            event_ticker=event_ticker, strategy=strategy, outcome="near_miss",
+            reject_reason=reject_reason, bid_sum=bid_sum, ask_sum=None,
+            profit_pct=None, exposure_ratio=None,
+            legs=[{"ticker": t, "price": p, "depth": d} for t, p, d in legs],
+            metadata=None,
+        )
+
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
         for meta in market_metadata.values():
@@ -64,14 +76,7 @@ class ArbEngine:
         if profit <= 0:
             if 0.97 <= bid_sum < 1.00:  # below $1.00 means maker can't profit either
                 logger.debug("taker near-miss %s: bid_sum=%.4f", event_ticker, bid_sum)
-                if self.recorder:
-                    self.recorder.record_signal(
-                        event_ticker=event_ticker, strategy="taker", outcome="near_miss",
-                        reject_reason=None, bid_sum=bid_sum, ask_sum=None,
-                        profit_pct=None, exposure_ratio=None,
-                        legs=[{"ticker": t, "price": p, "depth": d} for t, p, d in legs],
-                        metadata=None,
-                    )
+                self._record_near_miss(event_ticker, "taker", bid_sum, legs)
             return None
 
         profit_pct = (profit / 1.0) * 100
@@ -124,14 +129,7 @@ class ArbEngine:
                             "near-miss %s: bid_sum=%.4f blocked — %s depth < min %d",
                             event_ticker, bid_sum, ticker, effective_min_depth,
                         )
-                        if self.recorder:
-                            self.recorder.record_signal(
-                                event_ticker=event_ticker, strategy=strategy, outcome="near_miss",
-                                reject_reason="depth_filter", bid_sum=bid_sum, ask_sum=None,
-                                profit_pct=None, exposure_ratio=None,
-                                legs=[{"ticker": t, "price": p, "depth": d} for t, p, d in legs],
-                                metadata=None,
-                            )
+                        self._record_near_miss(event_ticker, strategy, bid_sum, legs, "depth_filter")
                     return None
 
         effective_min_volume = min_volume_24h if min_volume_24h is not None else self.min_volume_24h
@@ -144,14 +142,7 @@ class ArbEngine:
                             "near-miss %s: bid_sum=%.4f blocked — %s volume %.0f < min %.0f",
                             event_ticker, bid_sum, ticker, volume, effective_min_volume,
                         )
-                        if self.recorder:
-                            self.recorder.record_signal(
-                                event_ticker=event_ticker, strategy=strategy, outcome="near_miss",
-                                reject_reason="volume_filter", bid_sum=bid_sum, ask_sum=None,
-                                profit_pct=None, exposure_ratio=None,
-                                legs=[{"ticker": t, "price": p, "depth": d} for t, p, d in legs],
-                                metadata=None,
-                            )
+                        self._record_near_miss(event_ticker, strategy, bid_sum, legs, "volume_filter")
                     return None
 
         if self.min_open_interest > 0 and market_metadata:
@@ -185,14 +176,7 @@ class ArbEngine:
         if profit <= 0:
             if bid_sum >= 0.95:
                 logger.debug("maker near-miss %s: bid_sum=%.4f", event_ticker, bid_sum)
-                if self.recorder:
-                    self.recorder.record_signal(
-                        event_ticker=event_ticker, strategy="maker", outcome="near_miss",
-                        reject_reason=None, bid_sum=bid_sum, ask_sum=None,
-                        profit_pct=None, exposure_ratio=None,
-                        legs=[{"ticker": t, "price": p, "depth": d} for t, p, d in legs],
-                        metadata=None,
-                    )
+                self._record_near_miss(event_ticker, "maker", bid_sum, legs)
             return None
 
         profit_pct = (profit / 1.0) * 100
