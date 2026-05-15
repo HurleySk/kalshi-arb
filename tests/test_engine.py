@@ -922,18 +922,21 @@ def test_core_engine_maker_signal():
     from src.core.engine import ArbEngine as CoreEngine
     from src.exchanges.kalshi.fee_model import KalshiFeeModel
 
+    from datetime import datetime, timezone, timedelta
+
     fm = KalshiFeeModel()
     rp = load_risk_profile("aggressive", {})
-    engine = CoreEngine(fee_model=fm, risk_profile=rp)
+    engine = CoreEngine(fee_model=fm, risk_profile=rp, maker_max_horizon_hours=4.0)
+    close = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
     books = {
         "T-1": CoreOB(bids={35: 10.0}, asks={37: 5.0}),
         "T-2": CoreOB(bids={35: 10.0}, asks={37: 5.0}),
         "T-3": CoreOB(bids={35: 10.0}, asks={37: 5.0}),
     }
     meta = {
-        "T-1": {"volume_24h": 100},
-        "T-2": {"volume_24h": 100},
-        "T-3": {"volume_24h": 100},
+        "T-1": {"volume_24h": 100, "close_time": close},
+        "T-2": {"volume_24h": 100, "close_time": close},
+        "T-3": {"volume_24h": 100, "close_time": close},
     }
     signal = engine.evaluate_maker(event_ticker="E-1", orderbooks=books, market_metadata=meta)
     assert signal is not None

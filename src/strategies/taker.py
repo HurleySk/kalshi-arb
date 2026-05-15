@@ -38,6 +38,12 @@ def evaluate_sell_side(
         if vol < risk_profile.min_volume_24h:
             _log_near_miss(event_ticker, "taker", ticker, "volume", vol, risk_profile.min_volume_24h)
             return None
+        if risk_profile.min_open_interest > 0:
+            if meta.get("open_interest", 0) < risk_profile.min_open_interest:
+                return None
+        if risk_profile.min_liquidity > 0:
+            if meta.get("liquidity", 0) < risk_profile.min_liquidity:
+                return None
 
     bid_prices = [p for _, p, _ in legs]
     bid_sum = sum(bid_prices)

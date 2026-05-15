@@ -20,23 +20,29 @@ def evaluate(
     if market_metadata is None:
         market_metadata = {}
 
-    legs: list[tuple[str, float]] = []
+    legs: list[tuple[str, float, float]] = []
     for ticker, book in orderbooks.items():
         bid = book.best_bid()
         if bid is None:
             return None
-        legs.append((ticker, bid))
+        depth = book.bid_depth_at(bid)
+        legs.append((ticker, bid, depth))
 
-    for ticker, price in legs:
-        meta = market_metadata.get(ticker, {})
-        depth = orderbooks[ticker].bid_depth_at(price)
+    for ticker, price, depth in legs:
         if depth < risk_profile.near_expiry_min_bid_depth:
             return None
+        meta = market_metadata.get(ticker, {})
         vol = meta.get("volume_24h", 0)
         if vol < risk_profile.near_expiry_min_volume_24h:
             return None
+        if risk_profile.min_open_interest > 0:
+            if meta.get("open_interest", 0) < risk_profile.min_open_interest:
+                return None
+        if risk_profile.min_liquidity > 0:
+            if meta.get("liquidity", 0) < risk_profile.min_liquidity:
+                return None
 
-    bid_prices = [p for _, p in legs]
+    bid_prices = [p for _, p, _ in legs]
     profit = arb_profit(bid_prices, fee_model)
     if profit <= 0:
         return None
@@ -49,12 +55,15 @@ def evaluate(
     if exp_ratio > risk_profile.max_exposure_ratio:
         return None
 
+    depths = [d for _, _, d in legs]
+    quantity = max(1, min(int(min(depths)), max_contracts_per_arb))
+
     return TradeSignal(
         event_ticker=event_ticker,
-        legs=legs,
+        legs=[(t, p) for t, p, _ in legs],
         net_profit=profit,
         profit_pct=profit_pct,
         exposure_ratio=exp_ratio,
         signal_type="near_expiry_taker",
-        quantity=max_contracts_per_arb,
+        quantity=quantity,
     )
