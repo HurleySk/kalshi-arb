@@ -117,11 +117,18 @@ CREATE INDEX IF NOT EXISTS idx_obs_ts      ON orderbook_snapshots(ts);
 class DataRecorder:
     """SQLite-backed recorder.  Pass db_path=None for a disabled no-op instance."""
 
-    def __init__(self, db_path: str | None) -> None:
+    def __init__(
+        self,
+        db_path: str | None,
+        max_db_size_mb: int = 5000,
+        min_sessions: int = 1,
+    ) -> None:
         self._enabled = db_path is not None
         self._session_id: int | None = None
         self._conn: sqlite3.Connection | None = None
         self._db_path: str | None = db_path if self._enabled else None
+        self._max_db_size_mb = max_db_size_mb
+        self._min_sessions = min_sessions
 
         if self._enabled:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -157,6 +164,7 @@ class DataRecorder:
         if not self._enabled:
             return None
         assert self._conn is not None
+        self.purge_old_sessions(self._max_db_size_mb, self._min_sessions)
         cur = self._conn.execute(
             "INSERT INTO sessions (start_time, end_time, config_json) VALUES (?, NULL, ?)",
             (time.time(), json.dumps(config)),

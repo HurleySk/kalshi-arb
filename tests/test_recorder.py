@@ -225,3 +225,19 @@ def test_purge_sessions_rows_preserved(tmp_path):
     assert sessions == 3
 
     rec.close()
+
+
+def test_start_session_triggers_purge(tmp_path):
+    """start_session should purge old data when DB exceeds cap."""
+    db_path = str(tmp_path / "test.db")
+    rec = DataRecorder(db_path, max_db_size_mb=0, min_sessions=1)
+    _populate_sessions(rec, num_sessions=2, obs_per_session=10, sig_per_session=5)
+
+    rec.start_session({"session": "new"})
+
+    obs_sessions = rec._conn.execute(
+        "SELECT DISTINCT session_id FROM orderbook_snapshots"
+    ).fetchall()
+    assert len(obs_sessions) == 1
+
+    rec.close()
