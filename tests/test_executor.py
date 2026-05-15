@@ -5,7 +5,13 @@ from src.models import TradeSignal
 from src.risk import load_risk_profile
 
 
-def _make_executor(fill_timeout=5):
+_FAST_TIMEOUTS = dict(
+    batch_create_timeout=0.1, batch_cancel_timeout=0.1,
+    balance_timeout=0.1, monitor_poll_secs=0.01,
+)
+
+
+def _make_executor(fill_timeout=0):
     api = MagicMock()
     api.unwrap_order = lambda raw: raw.get("order", raw)
     api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
@@ -26,7 +32,7 @@ def _make_executor(fill_timeout=5):
     api.batch_cancel_orders = AsyncMock(return_value={})
     positions = MagicMock()
     positions.record_fill = MagicMock()
-    return ExecutionManager(api=api, positions=positions, fill_timeout_secs=fill_timeout), api, positions
+    return ExecutionManager(api=api, positions=positions, fill_timeout_secs=fill_timeout, **_FAST_TIMEOUTS), api, positions
 
 
 def test_executor_accepts_risk_profile_directly():
@@ -89,7 +95,7 @@ def test_is_executing_flag():
 
 # --- RiskProfile + Unwind tests ---
 
-def _make_executor_with_profile(mode="conservative", fill_timeout=1):
+def _make_executor_with_profile(mode="conservative", fill_timeout=0):
     profile = load_risk_profile(mode, {
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
@@ -122,11 +128,12 @@ def _make_executor_with_profile(mode="conservative", fill_timeout=1):
     return ExecutionManager(
         api=api, positions=positions,
         fill_timeout_secs=fill_timeout, risk_profile=profile,
+        **_FAST_TIMEOUTS,
     ), api, positions
 
 
 def test_partial_fill_triggers_unwind():
-    executor, api, positions = _make_executor_with_profile(fill_timeout=1)
+    executor, api, positions = _make_executor_with_profile()
     signal = TradeSignal(
         event_ticker="E1",
         legs=[("M1", 0.46), ("M2", 0.99)],
@@ -140,7 +147,7 @@ def test_partial_fill_triggers_unwind():
 
 
 def test_immediate_fills_are_tracked():
-    executor, api, positions = _make_executor_with_profile(fill_timeout=1)
+    executor, api, positions = _make_executor_with_profile()
     signal = TradeSignal(
         event_ticker="E1",
         legs=[("M1", 0.46), ("M2", 0.99)],
@@ -155,7 +162,7 @@ def test_immediate_fills_are_tracked():
 
 
 def test_unwind_places_buy_order():
-    executor, api, _ = _make_executor_with_profile(fill_timeout=1)
+    executor, api, _ = _make_executor_with_profile()
     signal = TradeSignal(
         event_ticker="E1",
         legs=[("M1", 0.46), ("M2", 0.99)],
@@ -240,7 +247,7 @@ def test_buy_side_resting_leg_immediate_cancel():
 def test_sell_side_resting_still_waits_for_fills():
     """Sell-side arbs with resting legs should still use _monitor_fills,
     not the immediate cancel path."""
-    executor, api, positions = _make_executor_with_profile(fill_timeout=1)
+    executor, api, positions = _make_executor_with_profile()
     signal = TradeSignal(
         event_ticker="E1",
         legs=[("M1", 0.46), ("M2", 0.99)],
@@ -292,7 +299,7 @@ def test_build_orders_buy_when_leg_action_is_buy():
 def test_unwind_sell_side_graduated_phases():
     """Sell-side arb partial fill: one leg filled as a sell, unwind by buying back.
     Should try 5 graduated prices before reaching the $0.99 ceiling."""
-    executor, api, positions = _make_executor_with_profile(fill_timeout=1)
+    executor, api, positions = _make_executor_with_profile()
     unwind_responses = [
         {"orders": [{"order": {"order_id": f"u{i}", "ticker": "M2",
                                 "status": "resting", "yes_price_dollars": "0.50",

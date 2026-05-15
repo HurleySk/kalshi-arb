@@ -35,7 +35,9 @@ def _make_executor(batch_create_side_effect=None, get_balance_side_effect=None):
     positions = PositionTracker()
     return ExecutionManager(
         api=api, positions=positions,
-        fill_timeout_secs=1, risk_profile=profile,
+        fill_timeout_secs=0, risk_profile=profile,
+        batch_create_timeout=0.1, batch_cancel_timeout=0.1,
+        balance_timeout=0.1, monitor_poll_secs=0.01,
     ), api
 
 
@@ -57,7 +59,7 @@ def test_batch_create_timeout_does_not_hang():
 
     async def _run():
         try:
-            await asyncio.wait_for(executor.execute(_signal()), timeout=20)
+            await asyncio.wait_for(executor.execute(_signal()), timeout=5)
         except asyncio.TimeoutError:
             raise AssertionError("execute() hung — batch_create_orders has no timeout")
 
@@ -74,7 +76,7 @@ def test_balance_check_timeout_proceeds():
     async def _run():
         signal = _signal(leg_actions=["buy", "buy"])
         try:
-            await asyncio.wait_for(executor.execute(signal), timeout=15)
+            await asyncio.wait_for(executor.execute(signal), timeout=5)
         except asyncio.TimeoutError:
             raise AssertionError("execute() hung — get_balance has no timeout")
 

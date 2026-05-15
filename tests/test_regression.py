@@ -16,7 +16,7 @@ def _conservative_engine():
     return ArbEngine(risk_profile=load_risk_profile("conservative", {}))
 
 
-def _partial_fill_executor(fill_timeout=1, mode="conservative"):
+def _partial_fill_executor(fill_timeout=0, mode="conservative"):
     profile = load_risk_profile(mode, {
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
@@ -47,6 +47,8 @@ def _partial_fill_executor(fill_timeout=1, mode="conservative"):
     return ExecutionManager(
         api=api, positions=positions,
         fill_timeout_secs=fill_timeout, risk_profile=profile,
+        batch_create_timeout=0.1, batch_cancel_timeout=0.1,
+        balance_timeout=0.1, monitor_poll_secs=0.01,
     ), api, positions
 
 
@@ -76,7 +78,7 @@ def test_phantom_liquidity_rejected_by_volume_check():
 
 def test_partial_fill_detection_counts_correctly():
     """Executor must count 1/2 filled (not 0/2) when batch returns one executed leg."""
-    executor, api, positions = _partial_fill_executor(fill_timeout=1)
+    executor, api, positions = _partial_fill_executor()
     signal = _medlan_signal()
 
     asyncio.run(executor.execute(signal, quantity=1))
@@ -88,7 +90,7 @@ def test_partial_fill_detection_counts_correctly():
 
 def test_partial_fill_blacklists_event():
     """After partial fill + timeout, the event must be blacklisted."""
-    executor, _, _ = _partial_fill_executor(fill_timeout=1)
+    executor, _, _ = _partial_fill_executor()
     signal = _medlan_signal()
 
     asyncio.run(executor.execute(signal, quantity=1))
@@ -97,7 +99,7 @@ def test_partial_fill_blacklists_event():
 
 def test_repeat_execution_prevented():
     """Same event should not re-execute after a partial fill failure."""
-    executor, _, _ = _partial_fill_executor(fill_timeout=1)
+    executor, _, _ = _partial_fill_executor()
     signal = _medlan_signal()
 
     asyncio.run(executor.execute(signal, quantity=1))
@@ -106,7 +108,7 @@ def test_repeat_execution_prevented():
 
 def test_unwind_fires_on_partial_fill():
     """After partial fill, unwind must place a buy-back order."""
-    executor, api, _ = _partial_fill_executor(fill_timeout=1)
+    executor, api, _ = _partial_fill_executor()
     signal = _medlan_signal()
 
     async def _run():

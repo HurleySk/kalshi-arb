@@ -131,7 +131,7 @@ Eight layers of timeout protection prevent hanging API calls from freezing the b
 5. **WebSocket reconnect** — 30s timeout on `connect()` inside `_reconnect()`.
 6. **Orderbook staleness** — `OrderbookManager.market_age()` tracks seconds since last update. Dispatcher skips signal evaluation when any market in the event is >5s stale.
 7. **SIGTERM handler** — `signal.SIGTERM`/`SIGINT` trigger graceful shutdown: cancel tasks, await unwinds, close connections.
-8. **Recent trades** — 10s timeout on `get_market_trades()`. On timeout, treats as "no recent trades" (rejects the signal).
+8. **Recent trades** — 10s initial timeout + 5s retry on `get_market_trades()`. On double timeout or retry failure, treats as "no recent trades" (rejects the signal).
 
 ### MCP Server (`src/mcp_server.py`)
 

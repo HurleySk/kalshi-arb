@@ -131,12 +131,20 @@ def test_pending_execution_prevents_duplicate():
     bot.engine.evaluate.assert_not_called()
 
 
+def _fast_shutdown_bot(bot):
+    """Set small timeouts so shutdown tests don't wait real seconds."""
+    bot._shutdown_timeout = 3
+    bot._shutdown_api_timeout = 0.05
+    bot._shutdown_retry_base = 1.01
+
+
 def test_emergency_shutdown_retries_on_rate_limit():
     """Emergency shutdown should retry the full sequence on 429."""
     import aiohttp
     bot = _make_bot()
     bot.executor.session_realized_loss = 1.0
     bot.maker = None
+    _fast_shutdown_bot(bot)
 
     call_count = {"n": 0}
     async def mock_batch_create(orders):
@@ -166,6 +174,7 @@ def test_emergency_shutdown_cancel_failure_doesnt_block_close():
     bot = _make_bot()
     bot.executor.session_realized_loss = 1.0
     bot.maker = None
+    _fast_shutdown_bot(bot)
 
     bot.api.get_open_orders = AsyncMock(return_value={"orders": [
         {"order_id": "r1", "status": "resting"},
@@ -187,9 +196,10 @@ def test_emergency_shutdown_does_not_hang():
     bot = _make_bot()
     bot.executor.session_realized_loss = 1.0
     bot.maker = None
+    _fast_shutdown_bot(bot)
 
     async def _hang(*args, **kwargs):
-        await asyncio.sleep(999)
+        await asyncio.Event().wait()
 
     bot.api.get_open_orders = AsyncMock(side_effect=_hang)
     bot.api.get_positions = AsyncMock(side_effect=_hang)
@@ -198,7 +208,7 @@ def test_emergency_shutdown_does_not_hang():
 
     async def _run():
         try:
-            await asyncio.wait_for(bot._emergency_shutdown(), timeout=70)
+            await asyncio.wait_for(bot._emergency_shutdown(), timeout=5)
         except asyncio.TimeoutError:
             raise AssertionError("_emergency_shutdown hung — no overall timeout")
 
@@ -210,6 +220,7 @@ def test_emergency_shutdown_idempotent():
     bot = _make_bot()
     bot.executor.session_realized_loss = 1.0
     bot.maker = None
+    _fast_shutdown_bot(bot)
     bot.api.get_open_orders = AsyncMock(return_value={"orders": []})
     bot.api.get_positions = AsyncMock(return_value={"market_positions": []})
 

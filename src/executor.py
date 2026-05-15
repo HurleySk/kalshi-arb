@@ -35,7 +35,11 @@ class ExecutionManager:
     def __init__(self, api: KalshiAPI, positions: PositionTracker,
                  fill_timeout_secs: int, risk_profile: RiskProfile | None = None,
                  max_session_loss: float = 1.0, circuit_breaker_on_any_loss: bool = True,
-                 recorder=None):
+                 recorder=None,
+                 batch_create_timeout: float = 15,
+                 batch_cancel_timeout: float = 10,
+                 balance_timeout: float = 10,
+                 monitor_poll_secs: float = 0.5):
         self.api = api
         self.positions = positions
         self.fill_timeout_secs = fill_timeout_secs
@@ -53,6 +57,10 @@ class ExecutionManager:
         self._circuit_breaker_on_any_loss = circuit_breaker_on_any_loss
         self._unwind_tasks: list[asyncio.Task] = []
         self._on_circuit_breaker_cb: Callable[[], None] | None = None
+        self._batch_create_timeout = batch_create_timeout
+        self._batch_cancel_timeout = batch_cancel_timeout
+        self._balance_timeout = balance_timeout
+        self._monitor_poll_secs = monitor_poll_secs
 
     def is_event_blacklisted(self, event_ticker: str) -> bool:
         return event_ticker in self._failed_events
@@ -96,7 +104,7 @@ class ExecutionManager:
         if signal.leg_actions and all(a == "buy" for a in signal.leg_actions):
             required = sum(price for _, price in signal.legs) * quantity
             try:
-                bal = await asyncio.wait_for(self.api.get_balance(), timeout=10)
+                bal = await asyncio.wait_for(self.api.get_balance(), timeout=self._balance_timeout)
                 available = bal.get("balance", 0) / 100.0
                 if available < required:
                     logger.warning(
@@ -115,7 +123,7 @@ class ExecutionManager:
                 signal.event_ticker, len(signal.legs), signal.net_profit, signal.profit_pct,
             )
 
-            response = await asyncio.wait_for(self.api.batch_create_orders(orders), timeout=15)
+            response = await asyncio.wait_for(self.api.batch_create_orders(orders), timeout=self._batch_create_timeout)
             logger.info("Batch order response: %s", response)
             order_list = response.get("orders", [])
             execution = ArbExecution(
@@ -159,7 +167,7 @@ class ExecutionManager:
                         "Buy-side resting legs detected for %s: %d/%d filled, cancelling %d immediately",
                         signal.event_ticker, len(execution.filled), len(execution.order_ids), len(resting_ids),
                     )
-                    await asyncio.wait_for(self.api.batch_cancel_orders(resting_ids), timeout=10)
+                    await asyncio.wait_for(self.api.batch_cancel_orders(resting_ids), timeout=self._batch_cancel_timeout)
                     if execution.filled:
                         logger.error(
                             "PARTIAL FILL on %s: %d legs filled, %d cancelled — UNHEDGED EXPOSURE",
@@ -227,7 +235,7 @@ class ExecutionManager:
             if len(execution.filled) == len(execution.order_ids):
                 logger.info("All legs filled for %s", execution.signal.event_ticker)
                 return
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(self._monitor_poll_secs)
 
         unfilled = [
             oid for oid in execution.order_ids if oid not in execution.filled
@@ -239,7 +247,7 @@ class ExecutionManager:
                 "Timeout: %d/%d legs filled for %s, cancelling %d unfilled",
                 filled_count, total_count, execution.signal.event_ticker, len(unfilled),
             )
-            await asyncio.wait_for(self.api.batch_cancel_orders(unfilled), timeout=10)
+            await asyncio.wait_for(self.api.batch_cancel_orders(unfilled), timeout=self._batch_cancel_timeout)
             if filled_count > 0:
                 logger.error(
                     "PARTIAL FILL on %s: %d legs filled, %d cancelled — UNHEDGED EXPOSURE",
@@ -266,12 +274,12 @@ class ExecutionManager:
                                     prev_oid: str | None, action: str = "buy") -> tuple[bool, float, str]:
         try:
             if prev_oid:
-                await asyncio.wait_for(self.api.cancel_order(prev_oid), timeout=10)
+                await asyncio.wait_for(self.api.cancel_order(prev_oid), timeout=self._batch_cancel_timeout)
         except (asyncio.TimeoutError, Exception):
             logger.warning("Failed to cancel previous unwind order %s — proceeding", prev_oid)
         build = self.api.build_buy_order if action == "buy" else self.api.build_sell_order
         order = [build(ticker=ticker, yes_price=price_cents / 100, quantity=qty)]
-        resp = await asyncio.wait_for(self.api.batch_create_orders(order), timeout=15)
+        resp = await asyncio.wait_for(self.api.batch_create_orders(order), timeout=self._batch_create_timeout)
         inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
         status = inner.get("status", "")
         unwind_price = float(inner.get("yes_price_dollars", 0))

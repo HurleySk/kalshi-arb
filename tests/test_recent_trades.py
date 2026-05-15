@@ -43,3 +43,51 @@ def test_recent_trades_skipped_in_aggressive_mode():
         bot._validate_recent_trades(["M1"])
     )
     assert result is True
+
+
+def test_recent_trades_timeout_then_retry_succeeds():
+    bot = _make_mock_bot()
+    bot.api.get_market_trades = AsyncMock(side_effect=[
+        asyncio.TimeoutError(),
+        {"trades": [{"ticker": "M1", "count": 1}], "cursor": ""},
+    ])
+
+    result = asyncio.run(bot._validate_recent_trades(["M1"]))
+    assert result is True
+    assert bot.api.get_market_trades.call_count == 2
+
+
+def test_recent_trades_double_timeout_rejects():
+    bot = _make_mock_bot()
+    bot.api.get_market_trades = AsyncMock(side_effect=[
+        asyncio.TimeoutError(),
+        asyncio.TimeoutError(),
+    ])
+
+    result = asyncio.run(bot._validate_recent_trades(["M1"]))
+    assert result is False
+    assert bot.api.get_market_trades.call_count == 2
+
+
+def test_recent_trades_timeout_then_retry_empty_rejects():
+    bot = _make_mock_bot()
+    bot.api.get_market_trades = AsyncMock(side_effect=[
+        asyncio.TimeoutError(),
+        {"trades": [], "cursor": ""},
+    ])
+
+    result = asyncio.run(bot._validate_recent_trades(["M1"]))
+    assert result is False
+    assert bot.api.get_market_trades.call_count == 2
+
+
+def test_recent_trades_timeout_then_retry_exception_rejects():
+    bot = _make_mock_bot()
+    bot.api.get_market_trades = AsyncMock(side_effect=[
+        asyncio.TimeoutError(),
+        RuntimeError("connection reset"),
+    ])
+
+    result = asyncio.run(bot._validate_recent_trades(["M1"]))
+    assert result is False
+    assert bot.api.get_market_trades.call_count == 2

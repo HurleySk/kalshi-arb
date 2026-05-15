@@ -103,6 +103,9 @@ class ArbBot:
             "arbs_failed": 0,
             "total_theoretical_profit": 0.0,
         }
+        self._shutdown_timeout: float = 60
+        self._shutdown_api_timeout: float = 15
+        self._shutdown_retry_base: float = 2
 
     def _setup_logging(self):
         log_dir = Path(self.cfg.log_file).parent
@@ -184,8 +187,19 @@ class ArbBot:
                     logger.info("No recent trades for %s, skipping arb", ticker)
                     return False
             except asyncio.TimeoutError:
-                logger.warning("Recent trades check timed out for %s — treating as no trades", ticker)
-                return False
+                logger.warning("Recent trades check timed out for %s — retrying once", ticker)
+                try:
+                    resp = await asyncio.wait_for(
+                        self.api.get_market_trades(ticker), timeout=5)
+                    if not resp.get("trades"):
+                        logger.info("No recent trades for %s on retry, skipping arb", ticker)
+                        return False
+                except asyncio.TimeoutError:
+                    logger.warning("Recent trades check timed out twice for %s — treating as no trades", ticker)
+                    return False
+                except Exception:
+                    logger.exception("Failed to check recent trades for %s on retry", ticker)
+                    return False
             except Exception:
                 logger.exception("Failed to check recent trades for %s", ticker)
                 return False
@@ -270,39 +284,42 @@ class ArbBot:
             self.executor.session_realized_loss,
         )
         try:
-            await asyncio.wait_for(self._emergency_shutdown_inner(), timeout=60)
+            await asyncio.wait_for(self._emergency_shutdown_inner(), timeout=self._shutdown_timeout)
         except asyncio.TimeoutError:
-            logger.critical("Emergency shutdown timed out after 60s — manual intervention required")
+            logger.critical("Emergency shutdown timed out after %.0fs — manual intervention required",
+                            self._shutdown_timeout)
 
     async def _emergency_shutdown_inner(self):
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 if self.maker:
-                    await asyncio.wait_for(self.maker.cancel_all(), timeout=15)
+                    await asyncio.wait_for(self.maker.cancel_all(), timeout=self._shutdown_api_timeout)
             except (asyncio.TimeoutError, Exception):
                 logger.warning("Failed to cancel maker orders (attempt %d)", attempt + 1)
 
             try:
-                orders_resp = await asyncio.wait_for(self.api.get_open_orders(), timeout=15)
+                orders_resp = await asyncio.wait_for(self.api.get_open_orders(), timeout=self._shutdown_api_timeout)
                 resting = [o for o in orders_resp.get("orders", [])
                            if o.get("status") in ("resting", "pending", "open")]
                 if resting:
                     await asyncio.wait_for(
-                        self.api.batch_cancel_orders([o["order_id"] for o in resting]), timeout=15)
+                        self.api.batch_cancel_orders([o["order_id"] for o in resting]),
+                        timeout=self._shutdown_api_timeout)
                     logger.info("Cancelled %d open orders", len(resting))
             except (asyncio.TimeoutError, Exception):
                 logger.warning("Failed to cancel open orders (attempt %d)", attempt + 1)
 
             try:
-                positions_resp = await asyncio.wait_for(self.api.get_positions(), timeout=15)
+                positions_resp = await asyncio.wait_for(self.api.get_positions(), timeout=self._shutdown_api_timeout)
                 close_orders = []
                 for mp in positions_resp.get("market_positions", []):
                     qty = int(float(mp.get("position_fp", "0")))
                     if qty != 0:
                         close_orders.append(self.api.build_close_order(mp["ticker"], qty))
                 if close_orders:
-                    await asyncio.wait_for(self.api.batch_create_orders(close_orders), timeout=15)
+                    await asyncio.wait_for(self.api.batch_create_orders(close_orders),
+                                           timeout=self._shutdown_api_timeout)
                     logger.info("Sent %d close orders", len(close_orders))
                 else:
                     logger.info("No positions to close")
@@ -314,7 +331,7 @@ class ArbBot:
                         max_retries,
                     )
                 else:
-                    wait = 2 ** attempt + 1
+                    wait = self._shutdown_retry_base ** attempt + 1
                     logger.warning(
                         "Emergency shutdown attempt %d failed, retrying in %ds",
                         attempt + 1, wait,

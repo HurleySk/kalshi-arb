@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "rules": {
+    "no-stacked-tests": {
+      "type": "guardrail",
+      "enforcement": "warn",
+      "priority": "high",
+      "description": "Detects and kills duplicate pytest runs — never stack test executions",
+      "async": {
+        "handler": "analyzer",
+        "name": "no-stacked-tests",
+        "config": {}
+      },
+      "triggers": {
+        "tool": {
+          "toolNames": [
+            "Bash"
+          ],
+          "inputPatterns": [
+            "pytest"
+          ]
+        }
+      }
+    }
+  }
+}
