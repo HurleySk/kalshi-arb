@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from src.api import KalshiAPI
@@ -51,7 +52,7 @@ class ExecutionManager:
         self._max_session_loss = max_session_loss
         self._circuit_breaker_on_any_loss = circuit_breaker_on_any_loss
         self._unwind_tasks: list[asyncio.Task] = []
-        self._on_circuit_breaker_cb: object | None = None
+        self._on_circuit_breaker_cb: Callable[[], None] | None = None
 
     def is_event_blacklisted(self, event_ticker: str) -> bool:
         return event_ticker in self._failed_events

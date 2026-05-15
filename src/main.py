@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -376,13 +377,13 @@ class ArbBot:
 
     async def _boot_reconcile_inner(self):
         try:
-            orders_resp = await self.api.get_open_orders()
+            orders_resp = await asyncio.wait_for(
+                self.api.get_open_orders(), timeout=15)
             resting = [
                 o for o in orders_resp.get("orders", [])
                 if o.get("status") in ("resting", "pending", "open")
             ]
             if len(resting) >= 100:
-                # get_open_orders returns at most 100 results; warn if we may have hit the cap
                 logger.warning(
                     "Boot: get_open_orders returned %d resting orders (may be truncated — "
                     "increase limit or paginate if this fires regularly)",
@@ -390,9 +391,12 @@ class ArbBot:
                 )
             if resting:
                 logger.warning("Boot: cancelling %d orphaned resting order(s)", len(resting))
-                await self.api.batch_cancel_orders([o["order_id"] for o in resting])
+                await asyncio.wait_for(
+                    self.api.batch_cancel_orders([o["order_id"] for o in resting]),
+                    timeout=15)
 
-            positions_resp = await self.api.get_positions()
+            positions_resp = await asyncio.wait_for(
+                self.api.get_positions(), timeout=15)
             longs, shorts = [], []
             for mp in positions_resp.get("market_positions", []):
                 qty = int(float(mp.get("position_fp", "0")))
@@ -415,7 +419,8 @@ class ArbBot:
                 for ticker in shorts:
                     order = self.api.build_close_order(ticker, -1)
                     try:
-                        result = await self.api.batch_create_orders([order])
+                        result = await asyncio.wait_for(
+                            self.api.batch_create_orders([order]), timeout=15)
                         inner = self.api.unwrap_order(result.get("orders", [{}])[0])
                         logger.info("Boot: closed short %s status=%s", ticker, inner.get("status", "?"))
                     except Exception:
@@ -470,7 +475,6 @@ class ArbBot:
             shutdown_event.set()
 
         loop = asyncio.get_event_loop()
-        import signal
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, _signal_handler)
 
@@ -519,7 +523,7 @@ class ArbBot:
         while True:
             await asyncio.sleep(interval)
             try:
-                bal = await self.api.get_balance()
+                bal = await asyncio.wait_for(self.api.get_balance(), timeout=10)
                 self.recorder.record_balance(
                     cash_cents=bal.get("balance", 0),
                     portfolio_cents=bal.get("portfolio_value", 0),
