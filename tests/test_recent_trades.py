@@ -9,7 +9,8 @@ def _make_mock_bot(mode="conservative"):
     bot.api = MagicMock()
     bot.api.get_market_trades = AsyncMock()
     bot.risk_profile = load_risk_profile(mode, {})
-    bot._recent_trades_retry_timeout = 5
+    bot._recent_trades_timeout = 0.1
+    bot._recent_trades_retry_timeout = 0.1
     return bot
 
 

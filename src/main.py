@@ -107,6 +107,7 @@ class ArbBot:
         self._shutdown_api_timeout: float = 15
         self._shutdown_retry_delay: float = 2
         self._shutdown_retry_backoff: float = 1.5
+        self._recent_trades_timeout: float = 10
         self._recent_trades_retry_timeout: float = 5
 
     def _setup_logging(self):
@@ -184,7 +185,7 @@ class ArbBot:
         for ticker in tickers:
             try:
                 resp = await asyncio.wait_for(
-                    self.api.get_market_trades(ticker), timeout=10)
+                    self.api.get_market_trades(ticker), timeout=self._recent_trades_timeout)
                 if not resp.get("trades"):
                     logger.info("No recent trades for %s, skipping arb", ticker)
                     return False
