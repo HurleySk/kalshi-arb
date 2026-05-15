@@ -17,6 +17,7 @@ class ArbEngine:
         self.near_term_hours = risk_profile.near_term_hours
         self.hurdle_rate_annual_pct = risk_profile.hurdle_rate_annual_pct
         self.min_bid_depth = risk_profile.min_bid_depth
+        self.min_ask_depth = risk_profile.min_ask_depth
         self.min_volume_24h = risk_profile.min_volume_24h
         self.maker_max_exposure_ratio = 50.0
         self.maker_max_horizon_hours = maker_max_horizon_hours
@@ -107,6 +108,7 @@ class ArbEngine:
         event_ticker: str | None = None,
         min_bid_depth: int | None = None,
         min_volume_24h: float | None = None,
+        min_ask_depth: int | None = None,
         strategy: str = "taker",
     ) -> list[tuple[str, float, float]] | None:
         legs: list[tuple[str, float, float]] = []
@@ -130,6 +132,29 @@ class ArbEngine:
                             event_ticker, bid_sum, ticker, effective_min_depth,
                         )
                         self._record_near_miss(event_ticker, strategy, bid_sum, legs, "depth_filter")
+                    return None
+
+        effective_min_ask_depth = min_ask_depth if min_ask_depth is not None else self.min_ask_depth
+        if effective_min_ask_depth >= 1:
+            for ticker, best_bid, depth in legs:
+                book = orderbooks[ticker]
+                best_ask = book.best_yes_ask()
+                if best_ask is None:
+                    if near_miss and event_ticker:
+                        logger.debug(
+                            "near-miss %s: bid_sum=%.4f blocked — %s no ask (one-sided market)",
+                            event_ticker, bid_sum, ticker,
+                        )
+                        self._record_near_miss(event_ticker, strategy, bid_sum, legs, "no_ask")
+                    return None
+                ask_depth = book.yes_ask_depth_at(best_ask)
+                if ask_depth < effective_min_ask_depth:
+                    if near_miss and event_ticker:
+                        logger.debug(
+                            "near-miss %s: bid_sum=%.4f blocked — %s ask_depth %.0f < min %d",
+                            event_ticker, bid_sum, ticker, ask_depth, effective_min_ask_depth,
+                        )
+                        self._record_near_miss(event_ticker, strategy, bid_sum, legs, "ask_depth_filter")
                     return None
 
         effective_min_volume = min_volume_24h if min_volume_24h is not None else self.min_volume_24h

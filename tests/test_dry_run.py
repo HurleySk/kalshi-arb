@@ -17,11 +17,11 @@ def _make_db(tmp_path, bid1=60, bid2=60):
     now = time.time()
     rec._conn.execute(
         "INSERT INTO orderbook_snapshots (session_id, ts, event_ticker, market_ticker, yes_bids_json, no_bids_json) VALUES (?, ?, ?, ?, ?, ?)",
-        (sid, now, "EVT-A", "MKT-1", json.dumps({str(bid1): 10.0}), json.dumps({})),
+        (sid, now, "EVT-A", "MKT-1", json.dumps({str(bid1): 10.0}), json.dumps({str(100 - bid1): 10.0})),
     )
     rec._conn.execute(
         "INSERT INTO orderbook_snapshots (session_id, ts, event_ticker, market_ticker, yes_bids_json, no_bids_json) VALUES (?, ?, ?, ?, ?, ?)",
-        (sid, now, "EVT-A", "MKT-2", json.dumps({str(bid2): 10.0}), json.dumps({})),
+        (sid, now, "EVT-A", "MKT-2", json.dumps({str(bid2): 10.0}), json.dumps({str(100 - bid2): 10.0})),
     )
     rec._conn.commit()
     rec.end_session()

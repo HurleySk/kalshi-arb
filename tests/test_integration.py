@@ -31,17 +31,17 @@ def test_full_pipeline_detects_and_builds_orders():
     orderbook_mgr.apply_snapshot("M1", {
         "market_ticker": "M1",
         "yes_dollars_fp": [["0.4000", "100.00"]],
-        "no_dollars_fp": [],
+        "no_dollars_fp": [["0.6000", "100.00"]],
     })
     orderbook_mgr.apply_snapshot("M2", {
         "market_ticker": "M2",
         "yes_dollars_fp": [["0.3500", "100.00"]],
-        "no_dollars_fp": [],
+        "no_dollars_fp": [["0.6500", "100.00"]],
     })
     orderbook_mgr.apply_snapshot("M3", {
         "market_ticker": "M3",
         "yes_dollars_fp": [["0.3500", "100.00"]],
-        "no_dollars_fp": [],
+        "no_dollars_fp": [["0.6500", "100.00"]],
     })
 
     event_books = orderbook_mgr.get_event_orderbooks("E1")

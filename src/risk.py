@@ -13,6 +13,7 @@ class RiskProfile:
     unwind_phase1_secs: int
     unwind_phase2_secs: int
     unwind_price_step_cents: int
+    min_ask_depth: int = 1
     min_open_interest: float = 0.0
     min_liquidity: float = 0.0
     enable_buy_side_arb: bool = False
@@ -33,6 +34,7 @@ PRESETS: dict[str, dict] = {
     "conservative": {
         "min_volume_24h": 50.0,
         "min_bid_depth": 5,
+        "min_ask_depth": 5,
         "min_profit_pct": 2.0,
         "require_recent_trades": True,
         "max_exposure_ratio": 2.0,
@@ -57,6 +59,7 @@ PRESETS: dict[str, dict] = {
     "moderate": {
         "min_volume_24h": 10.0,
         "min_bid_depth": 2,
+        "min_ask_depth": 2,
         "min_profit_pct": 1.0,
         "require_recent_trades": True,
         "max_exposure_ratio": 3.0,
@@ -81,6 +84,7 @@ PRESETS: dict[str, dict] = {
     "aggressive": {
         "min_volume_24h": 0.0,
         "min_bid_depth": 1,
+        "min_ask_depth": 1,
         "min_profit_pct": 0.5,
         "require_recent_trades": False,
         "max_exposure_ratio": 5.0,

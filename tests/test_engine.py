@@ -8,6 +8,8 @@ from src.risk import RiskProfile, load_risk_profile
 def _ob(yes_prices=None, no_prices=None):
     yes = {round(p * 100): q for p, q in (yes_prices or [])}
     no = {round(p * 100): q for p, q in (no_prices or [])}
+    if yes and not no:
+        no = {round((1.0 - max(yes) / 100.0) * 100): 100}
     return Orderbook(yes_bids=yes, no_bids=no)
 
 
@@ -27,6 +29,7 @@ def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0, **kwargs):
         min_liquidity=kwargs.get("min_liquidity", 0.0),
         min_buy_side_coverage=kwargs.get("min_buy_side_coverage", 0.0),
         maker_min_volume_24h=kwargs.get("maker_min_volume_24h", 0.0),
+        min_ask_depth=kwargs.get("min_ask_depth", 1),
     )
     return ArbEngine(
         risk_profile=profile,
@@ -697,6 +700,42 @@ def test_evaluate_two_sided_disabled_when_max_inventory_zero():
 
 
 # --- near-miss recording tests ---
+
+def test_ask_depth_rejects_no_asks():
+    """Market with bids but no asks (one-sided) should be rejected."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_ask_depth=1)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={40: 100}, no_bids={}),
+        "M2": _ob([(0.35, 100)]),
+        "M3": _ob([(0.35, 100)]),
+    }
+    signal = engine.evaluate("E1", orderbooks)
+    assert signal is None
+
+
+def test_ask_depth_rejects_thin_asks():
+    """Ask depth below min_ask_depth should reject the signal."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_ask_depth=10)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={40: 100}, no_bids={60: 2}),
+        "M2": Orderbook(yes_bids={35: 100}, no_bids={65: 100}),
+        "M3": Orderbook(yes_bids={35: 100}, no_bids={65: 100}),
+    }
+    signal = engine.evaluate("E1", orderbooks)
+    assert signal is None
+
+
+def test_ask_depth_accepts_sufficient_asks():
+    """Signal should pass when ask depth meets the minimum."""
+    engine = _make_engine(min_profit_pct=1.0, max_exposure_ratio=10.0, min_ask_depth=5)
+    orderbooks = {
+        "M1": Orderbook(yes_bids={40: 100}, no_bids={60: 10}),
+        "M2": Orderbook(yes_bids={35: 100}, no_bids={65: 10}),
+        "M3": Orderbook(yes_bids={35: 100}, no_bids={65: 10}),
+    }
+    signal = engine.evaluate("E1", orderbooks)
+    assert signal is not None
+
 
 def test_evaluate_records_near_miss():
     """Engine should call recorder.record_signal for taker near-misses."""
