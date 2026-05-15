@@ -104,6 +104,23 @@ These event families have been confirmed pseudo-arbs (bot saw only low-probabili
 - `KXBBCHARTPOSITIONSONG-*` — Billboard chart position slots #1-#10 are NOT exhaustive (song could chart at #11+). Always close.
 - `KXHIGHLAX-*`, `KXHIGHPHIL-*`, `KXHIGHTDC-*`, `KXLOWTDC-*` — Temperature bucket events where bot sometimes registers only low-probability extreme buckets. Check ask_sum; if < $0.60, close.
 
+### Post-Run Performance Review
+
+After completing position analysis (either `report-only` or `close-bad`), if the analytics database is available:
+
+**Step 7: Pull performance report**
+
+Call `mcp__kalshi-arb__get_performance_report` with days=1.
+
+Append to your findings:
+- Strategy breakdown (which strategies fired, profit per trade)
+- Rejection funnel (what filters are blocking the most signals)
+- Near-miss count (are thresholds well-calibrated?)
+
+**Step 8: Dispatch post-run analyst (optional)**
+
+If the performance report shows anomalies (partial fill rate > 15%, or near-misses > 3x fires for any strategy), recommend running `/post-run-analyst` for a deeper analysis.
+
 ## Notes
 
 - `mcp__kalshi-arb__get_positions` returns positions from the live Kalshi account
