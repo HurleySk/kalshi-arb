@@ -16,6 +16,17 @@ mcp = FastMCP("kalshi-arb")
 CONFIG_PATH = "config.yaml"
 
 
+def _db_kwargs(cfg) -> dict:
+    """Build kwargs for Analytics/ReplayEngine from config."""
+    session_dir = getattr(cfg, "recording_session_dir", None)
+    if session_dir and cfg.recording_enabled:
+        import os
+        if os.path.isdir(session_dir):
+            return {"session_dir": session_dir}
+    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
+    return {"db_path": db_path}
+
+
 async def _get_api() -> KalshiAPI:
     cfg = load_config(CONFIG_PATH)
     auth = KalshiAuth(api_key_id=cfg.api_key_id, private_key_path=cfg.private_key_path)
@@ -179,8 +190,7 @@ async def get_performance_report(days: int = 7) -> str:
     import time as _time
     from src.analytics import Analytics
     cfg = load_config(CONFIG_PATH)
-    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
-    analytics = Analytics(db_path)
+    analytics = Analytics(**_db_kwargs(cfg))
     end = _time.time()
     start = end - (days * 86400)
     report = analytics.full_report(start=start, end=end)
@@ -210,8 +220,7 @@ async def get_parameter_sensitivity(
     import time as _time
     from src.replay import ReplayEngine
     cfg = load_config(CONFIG_PATH)
-    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
-    engine = ReplayEngine(db_path, risk_mode=cfg.risk_mode)
+    engine = ReplayEngine(**_db_kwargs(cfg), risk_mode=cfg.risk_mode)
 
     values = []
     v = range_start
@@ -260,8 +269,7 @@ async def get_near_misses(
     import time as _time
     from src.analytics import Analytics
     cfg = load_config(CONFIG_PATH)
-    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
-    analytics = Analytics(db_path)
+    analytics = Analytics(**_db_kwargs(cfg))
     end = _time.time()
     start = end - (days * 86400)
     nm = analytics.near_miss_analysis(start=start, end=end)
@@ -299,8 +307,7 @@ async def get_signal_history(
     import time as _time
     from datetime import datetime, timezone
     cfg = load_config(CONFIG_PATH)
-    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
-    conn = sqlite3.connect(db_path)
+    kwargs = _db_kwargs(cfg)
 
     end = _time.time()
     start = end - (days * 86400)
@@ -314,11 +321,15 @@ async def get_signal_history(
         params.append(outcome)
 
     where = " AND ".join(conditions)
-    rows = conn.execute(
-        f"SELECT ts, event_ticker, strategy, outcome, bid_sum, profit_pct FROM signal_evaluations WHERE {where} ORDER BY ts DESC LIMIT ?",
-        params + [limit],
-    ).fetchall()
-    conn.close()
+    sql = f"SELECT ts, event_ticker, strategy, outcome, bid_sum, profit_pct FROM signal_evaluations WHERE {where} ORDER BY ts DESC LIMIT ?"
+    if "session_dir" in kwargs:
+        from src.session_reader import SessionReader
+        rows = SessionReader(kwargs["session_dir"]).query_across(sql, tuple(params + [limit]), start=start, end=end)
+    else:
+        db_path = kwargs.get("db_path", "data/arb_history.db")
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(sql, params + [limit]).fetchall()
+        conn.close()
 
     lines = [f"Signal History (last {days} day(s), {strategy}/{outcome})", "-" * 70]
     for ts, event, strat, out, bid_sum, profit_pct in rows:
@@ -351,8 +362,7 @@ async def get_replay_comparison(
     import time as _time
     from src.replay import ReplayEngine
     cfg = load_config(CONFIG_PATH)
-    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
-    engine = ReplayEngine(db_path, risk_mode=cfg.risk_mode)
+    engine = ReplayEngine(**_db_kwargs(cfg), risk_mode=cfg.risk_mode)
 
     end = _time.time()
     start = end - (days * 86400)

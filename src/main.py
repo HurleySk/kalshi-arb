@@ -38,12 +38,13 @@ class ArbBot:
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
 
-        db_path = self.cfg.recording_db_path if self.cfg.recording_enabled else None
-        self.recorder = DataRecorder(
-            db_path,
-            max_db_size_mb=self.cfg.retention_max_db_size_mb,
-            min_sessions=self.cfg.retention_min_sessions,
-        )
+        if self.cfg.recording_enabled:
+            self.recorder = DataRecorder(
+                session_dir=self.cfg.recording_session_dir,
+                max_db_size_mb=self.cfg.retention_max_db_size_mb,
+            )
+        else:
+            self.recorder = DataRecorder()
 
         self.engine = ArbEngine(
             risk_profile=self.risk_profile,

@@ -127,129 +127,108 @@ def test_recorder_disabled():
     # Should not raise — all methods are no-ops
 
 
-def _populate_sessions(recorder, num_sessions, obs_per_session=10, sig_per_session=5):
-    """Helper: create multiple sessions with snapshots, signals, executions, and fills."""
-    for i in range(num_sessions):
-        sid = recorder.start_session({"session": i})
-        for j in range(obs_per_session):
-            recorder.record_orderbook_snapshot(
-                event_ticker=f"EVT-{i}",
-                market_ticker=f"MKT-{i}-{j}",
-                yes_bids={55: 10.0},
-                no_bids={45: 8.0},
-            )
-        for j in range(sig_per_session):
-            recorder.record_signal(
-                event_ticker=f"EVT-{i}", strategy="taker", outcome="skip",
-                reject_reason="test", bid_sum=1.0, ask_sum=None,
-                profit_pct=0.0, exposure_ratio=0.0, legs=None, metadata=None,
-            )
-        recorder.record_execution(
-            event_ticker=f"EVT-{i}", strategy="taker",
-            legs=[{"ticker": f"MKT-{i}", "price": 0.55}],
-            result="full_fill", fill_details=None, unwind_cost=0.0,
+def _create_session_file(session_dir, ts, obs_count=5):
+    """Helper: create a session DB file with some data."""
+    rec = DataRecorder(session_dir=str(session_dir))
+    rec._session_dir = str(session_dir)
+    db_file = session_dir / f"session_{ts:.6f}.db"
+    rec._db_path = str(db_file)
+    rec._conn = sqlite3.connect(str(db_file))
+    rec._conn.execute("PRAGMA journal_mode=WAL")
+    rec._init_schema()
+    rec._session_id = 1
+    rec._conn.execute(
+        "INSERT INTO sessions (id, start_time, config_json) VALUES (1, ?, '{}')", (ts,))
+    for i in range(obs_count):
+        rec.record_orderbook_snapshot(
+            event_ticker=f"EVT-{ts}", market_ticker=f"MKT-{i}",
+            yes_bids={55: 10.0}, no_bids={45: 8.0},
         )
-        recorder.record_fill(
-            ticker=f"MKT-{i}", side="yes", action="sell",
-            price=0.55, quantity=1, realized_pnl=0.01,
-        )
-        recorder.record_balance(cash_cents=10000, portfolio_cents=10500)
-        recorder.end_session()
+    rec._conn.commit()
+    rec._conn.close()
+    rec._conn = None
+    return db_file
 
 
-def test_purge_skips_when_under_cap(recorder):
-    """purge_old_sessions should no-op when DB is under the size cap."""
-    recorder.start_session({})
-    recorder.record_orderbook_snapshot(
+def test_per_session_creates_new_db_file(tmp_path):
+    """start_session in session_dir mode creates a new DB file."""
+    session_dir = tmp_path / "sessions"
+    rec = DataRecorder(session_dir=str(session_dir))
+    sid = rec.start_session({"test": True})
+    assert sid == 1
+    assert rec._db_path is not None
+    assert "session_" in rec._db_path
+    rec.record_orderbook_snapshot(
         event_ticker="EVT-A", market_ticker="MKT-1",
         yes_bids={55: 10.0}, no_bids={45: 8.0},
     )
-    recorder.end_session()
-    result = recorder.purge_old_sessions(max_db_size_mb=1000, min_sessions=1)
-    assert result is None
-    rows = recorder._conn.execute("SELECT COUNT(*) FROM orderbook_snapshots").fetchone()[0]
+    rows = rec._conn.execute("SELECT COUNT(*) FROM orderbook_snapshots").fetchone()[0]
     assert rows == 1
+    rec.end_session()
+    rec.close()
+
+    import glob
+    files = glob.glob(str(session_dir / "session_*.db"))
+    assert len(files) == 1
 
 
-def test_purge_deletes_oldest_session_snapshots_and_signals(tmp_path):
-    """purge should delete snapshots and signals from oldest session first."""
-    db_path = str(tmp_path / "test.db")
-    rec = DataRecorder(db_path)
-    _populate_sessions(rec, num_sessions=3, obs_per_session=10, sig_per_session=5)
+def test_cleanup_deletes_oldest_files(tmp_path):
+    """cleanup_old_files should delete oldest session files when over cap."""
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
 
-    result = rec.purge_old_sessions(max_db_size_mb=0, min_sessions=1)
+    _create_session_file(session_dir, 1000.0, obs_count=50)
+    _create_session_file(session_dir, 2000.0, obs_count=50)
+    _create_session_file(session_dir, 3000.0, obs_count=50)
+
+    rec = DataRecorder(session_dir=str(session_dir), max_db_size_mb=0)
+    rec._db_path = str(session_dir / "session_9999.000000.db")
+    result = rec.cleanup_old_files()
+
     assert result is not None
-    assert len(result["sessions_purged"]) == 2
+    assert len(result["deleted"]) >= 1
 
-    obs = rec._conn.execute("SELECT COUNT(*) FROM orderbook_snapshots").fetchone()[0]
-    sig = rec._conn.execute("SELECT COUNT(*) FROM signal_evaluations").fetchone()[0]
-    assert obs == 10
-    assert sig == 5
-
-    execs = rec._conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0]
-    fills = rec._conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0]
-    bals = rec._conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0]
-    assert execs == 3
-    assert fills == 3
-    assert bals == 3
-
-    rec.close()
+    import glob
+    remaining = glob.glob(str(session_dir / "session_*.db*"))
+    assert len(remaining) < 6
 
 
-def test_purge_respects_min_sessions(tmp_path):
-    """purge should never delete below min_sessions even if over cap."""
-    db_path = str(tmp_path / "test.db")
-    rec = DataRecorder(db_path)
-    _populate_sessions(rec, num_sessions=3, obs_per_session=10, sig_per_session=5)
+def test_cleanup_skips_when_under_cap(tmp_path):
+    """cleanup_old_files should no-op when total size is under cap."""
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+    _create_session_file(session_dir, 1000.0, obs_count=5)
 
-    result = rec.purge_old_sessions(max_db_size_mb=0, min_sessions=2)
-    assert result is not None
-    assert len(result["sessions_purged"]) == 1
-
-    sessions_with_obs = rec._conn.execute(
-        "SELECT DISTINCT session_id FROM orderbook_snapshots"
-    ).fetchall()
-    assert len(sessions_with_obs) == 2
-
-    rec.close()
+    rec = DataRecorder(session_dir=str(session_dir), max_db_size_mb=5000)
+    result = rec.cleanup_old_files()
+    assert result is None
 
 
-def test_purge_sessions_rows_preserved(tmp_path):
-    """Session table rows should never be deleted (referential integrity with trade data)."""
-    db_path = str(tmp_path / "test.db")
-    rec = DataRecorder(db_path)
-    _populate_sessions(rec, num_sessions=3, obs_per_session=5, sig_per_session=3)
+def test_cleanup_preserves_current_session(tmp_path):
+    """cleanup_old_files should never delete the active session's DB."""
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
 
-    rec.purge_old_sessions(max_db_size_mb=0, min_sessions=1)
+    old_file = _create_session_file(session_dir, 1000.0, obs_count=50)
+    current_file = _create_session_file(session_dir, 2000.0, obs_count=50)
 
-    sessions = rec._conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-    assert sessions == 3
+    rec = DataRecorder(session_dir=str(session_dir), max_db_size_mb=0)
+    rec._db_path = str(current_file)
+    rec.cleanup_old_files()
 
-    rec.close()
-
-
-def test_start_session_triggers_purge(tmp_path):
-    """start_session should purge old data when DB exceeds cap."""
-    db_path = str(tmp_path / "test.db")
-    rec = DataRecorder(db_path, max_db_size_mb=0, min_sessions=1)
-    _populate_sessions(rec, num_sessions=2, obs_per_session=10, sig_per_session=5)
-
-    rec.start_session({"session": "new"})
-
-    obs_sessions = rec._conn.execute(
-        "SELECT DISTINCT session_id FROM orderbook_snapshots"
-    ).fetchall()
-    assert len(obs_sessions) == 1
-
-    rec.close()
+    assert current_file.exists(), "Current session file must not be deleted"
 
 
-def test_cleanup_loop_calls_purge(tmp_path):
-    """cleanup_loop should call purge_old_sessions periodically."""
-    db_path = str(tmp_path / "test.db")
-    rec = DataRecorder(db_path, max_db_size_mb=0, min_sessions=1)
+def test_cleanup_loop_deletes_files(tmp_path):
+    """cleanup_loop should periodically delete oldest session files."""
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
 
-    _populate_sessions(rec, num_sessions=2, obs_per_session=5, sig_per_session=3)
+    _create_session_file(session_dir, 1000.0, obs_count=50)
+    _create_session_file(session_dir, 2000.0, obs_count=50)
+
+    rec = DataRecorder(session_dir=str(session_dir), max_db_size_mb=0)
+    rec._db_path = str(session_dir / "session_9999.000000.db")
 
     async def _run():
         loop_task = asyncio.create_task(rec.cleanup_loop(interval_secs=0.01))
@@ -262,9 +241,6 @@ def test_cleanup_loop_calls_purge(tmp_path):
 
     asyncio.run(_run())
 
-    obs_sessions = rec._conn.execute(
-        "SELECT DISTINCT session_id FROM orderbook_snapshots"
-    ).fetchall()
-    assert len(obs_sessions) == 1
-
-    rec.close()
+    import glob
+    remaining = glob.glob(str(session_dir / "session_*.db"))
+    assert len(remaining) < 2

@@ -23,11 +23,15 @@ from src.risk import load_risk_profile
 class ReplayEngine:
     """Replay recorded orderbook snapshots against ArbEngine with varying parameters."""
 
-    def __init__(self, db_path: str, risk_mode: str = "conservative") -> None:
+    def __init__(self, db_path: str | None = None, risk_mode: str = "conservative",
+                 session_dir: str | None = None) -> None:
         self._db_path = db_path
+        self._session_dir = session_dir
         self._risk_mode = risk_mode
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+        self._conn: sqlite3.Connection | None = None
+        if db_path:
+            self._conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
 
     # ------------------------------------------------------------------
     # Loading
@@ -57,7 +61,13 @@ class ReplayEngine:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY ts ASC"
 
-        rows = self._conn.execute(query, params).fetchall()
+        if self._session_dir:
+            from src.session_reader import SessionReader
+            reader = SessionReader(self._session_dir)
+            rows = reader.query_across(query, tuple(params), start=start, end=end)
+        else:
+            assert self._conn is not None
+            rows = self._conn.execute(query, params).fetchall()
 
         # Group by timestamp then event_ticker
         grouped: dict[float, dict[str, dict[str, Orderbook]]] = {}

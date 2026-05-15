@@ -36,6 +36,7 @@ class Config:
     log_file: str
     recording_enabled: bool
     recording_db_path: str
+    recording_session_dir: str
     recording_snapshot_interval_secs: int
     recording_balance_poll_interval_secs: int
     retention_max_db_size_mb: int
@@ -102,6 +103,7 @@ def load_config(path: str) -> Config:
         log_file=logging_cfg.get("file", "logs/arb_bot.log"),
         recording_enabled=recording_cfg.get("enabled", True),
         recording_db_path=recording_cfg.get("db_path", "data/arb_history.db"),
+        recording_session_dir=recording_cfg.get("session_dir", "data/sessions"),
         recording_snapshot_interval_secs=int(recording_cfg.get("snapshot_interval_secs", 5)),
         recording_balance_poll_interval_secs=int(recording_cfg.get("balance_poll_interval_secs", 300)),
         retention_max_db_size_mb=max(0, int(recording_cfg.get("retention_max_db_size_mb", 5000))),

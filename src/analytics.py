@@ -17,12 +17,21 @@ from typing import Any
 class Analytics:
     """Read-only analytics over the DataRecorder SQLite database."""
 
-    def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._has_tables = self._check_tables()
+    def __init__(self, db_path: str | None = None, session_dir: str | None = None) -> None:
+        self._conn: sqlite3.Connection | None = None
+        self._session_dir = session_dir
+        self._has_tables = False
+
+        if db_path:
+            self._conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._has_tables = self._check_tables()
+        elif session_dir:
+            self._has_tables = True
 
     def _check_tables(self) -> bool:
+        if self._conn is None:
+            return False
         tables = {r[0] for r in self._conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()}
@@ -31,6 +40,10 @@ class Analytics:
     def _query(self, sql: str, params: list | None = None) -> list[sqlite3.Row]:
         if not self._has_tables:
             return []
+        if self._session_dir:
+            from src.session_reader import SessionReader
+            return SessionReader(self._session_dir).query_across(sql, tuple(params or []))
+        assert self._conn is not None
         return self._conn.execute(sql, params or []).fetchall()
 
     def _query_one(self, sql: str, params: list | None = None) -> sqlite3.Row | None:

@@ -27,10 +27,21 @@ Pass individual rates: `/dry-run --partial-fill-rate 0.5 --ws-race-rate 0.8`
 
 ```bash
 python3 -m src.dry_run --db data/arb_history.db \
-    --partial-fill-rate {rate} --ws-race-rate {rate} --seed 42
+    --partial-fill-rate {rate} --ws-race-rate {rate} --seed 42 \
+    --risk-mode {conservative|moderate|aggressive}
 ```
 
-For presets, map to the rates in the table above. Default risk mode is `conservative`.
+For presets, map to the rates in the table above.
+
+**Risk mode:** User can specify `--risk-mode` (default `conservative`). Different risk modes use different filter thresholds, so signal counts vary significantly. **Always run all three modes** to ensure invariants hold across filter configurations:
+
+```bash
+for mode in conservative moderate aggressive; do
+    echo "=== $mode ==="
+    python3 -m src.dry_run --db data/arb_history.db \
+        --ws-race-rate 1.0 --partial-fill-rate 0.2 --seed 42 --risk-mode $mode
+done
+```
 
 ### Step 2: Interpret results
 
