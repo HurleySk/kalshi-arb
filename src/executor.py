@@ -51,7 +51,7 @@ class ExecutionManager:
         self._max_session_loss = max_session_loss
         self._circuit_breaker_on_any_loss = circuit_breaker_on_any_loss
         self._unwind_tasks: list[asyncio.Task] = []
-        self._on_circuit_breaker: asyncio.Future | None = None
+        self._on_circuit_breaker_cb: object | None = None
 
     def is_event_blacklisted(self, event_ticker: str) -> bool:
         return event_ticker in self._failed_events
@@ -172,7 +172,21 @@ class ExecutionManager:
 
             await self._monitor_fills(execution)
 
-            if getattr(execution, '_needs_unwind', False):
+            if execution._needs_unwind:
+                if self.recorder:
+                    self.recorder.record_execution(
+                        event_ticker=signal.event_ticker,
+                        strategy=signal.signal_type,
+                        legs=[{
+                            "ticker": t,
+                            "action": (signal.leg_actions[i] if signal.leg_actions else "sell"),
+                            "price": p,
+                            "quantity": quantity,
+                        } for i, (t, p) in enumerate(signal.legs)],
+                        result="partial_fill",
+                        fill_details={oid: price for oid, price in execution.filled.items()},
+                        unwind_cost=0.0,
+                    )
                 self._executing = False
                 self._active = None
                 self._launch_unwind(execution)
@@ -278,8 +292,8 @@ class ExecutionManager:
         except Exception:
             logger.exception("Unwind task crashed")
         self._unwind_tasks = [t for t in self._unwind_tasks if not t.done()]
-        if self._circuit_breaker_tripped and self._on_circuit_breaker:
-            self._on_circuit_breaker.set_result(True)
+        if self._circuit_breaker_tripped and self._on_circuit_breaker_cb:
+            self._on_circuit_breaker_cb()
 
     async def _unwind_with_timeout(self, execution: ArbExecution, timeout_secs: float):
         completed_tickers: set[str] = set()

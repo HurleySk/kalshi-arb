@@ -55,6 +55,9 @@ class ArbBot:
             circuit_breaker_on_any_loss=self.cfg.circuit_breaker_on_any_loss,
             recorder=self.recorder,
         )
+        self.executor._on_circuit_breaker_cb = lambda: asyncio.create_task(
+            self._emergency_shutdown()
+        )
         self.maker = MakerManager(
             api=self.api,
             fill_mode=self.cfg.maker_fill_mode,
