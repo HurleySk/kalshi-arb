@@ -34,6 +34,10 @@ class Config:
     max_contracts_per_arb: int
     log_level: str
     log_file: str
+    recording_enabled: bool
+    recording_db_path: str
+    recording_snapshot_interval_secs: int
+    recording_balance_poll_interval_secs: int
 
 
 def load_config(path: str) -> Config:
@@ -59,6 +63,7 @@ def load_config(path: str) -> Config:
     rest_url, ws_url = URLS[mode]
     strategy = raw["strategy"]
     logging_cfg = raw.get("logging", {})
+    recording_cfg = raw.get("recording", {})
 
     risk_mode = strategy.get("risk_mode", "conservative")
     override_keys = {
@@ -89,4 +94,8 @@ def load_config(path: str) -> Config:
         max_contracts_per_arb=int(strategy.get("max_contracts_per_arb", 1)),
         log_level=logging_cfg.get("level", "INFO"),
         log_file=logging_cfg.get("file", "logs/arb_bot.log"),
+        recording_enabled=recording_cfg.get("enabled", True),
+        recording_db_path=recording_cfg.get("db_path", "data/arb_history.db"),
+        recording_snapshot_interval_secs=int(recording_cfg.get("snapshot_interval_secs", 5)),
+        recording_balance_poll_interval_secs=int(recording_cfg.get("balance_poll_interval_secs", 300)),
     )

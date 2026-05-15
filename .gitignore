@@ -33,6 +33,10 @@ logs/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 
+# Analytics data
+data/
+*.db
+
 # OS
 .DS_Store
 Thumbs.db
