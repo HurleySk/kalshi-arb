@@ -298,5 +298,17 @@ class ExecutionManager:
 
         if self._active and order_id in self._active.order_ids:
             self._active.filled[order_id] = price
+            if not any(fl.ticker == ticker for fl in self._active.filled_legs):
+                idx = self._active.order_ids.index(order_id)
+                sig = self._active.signal
+                original_action = (
+                    sig.leg_actions[idx] if sig.leg_actions and idx < len(sig.leg_actions) else "sell"
+                )
+                self._active.filled_legs.append(FilledLeg(
+                    ticker=ticker,
+                    fill_price=price,
+                    quantity=quantity,
+                    unwind_action="sell" if original_action == "buy" else "buy",
+                ))
             logger.info("Leg filled: %s @ %.2f (%d/%d)",
                         ticker, price, len(self._active.filled), len(self._active.order_ids))
