@@ -769,12 +769,14 @@ def test_taker_evaluate_sell_side():
     rp = load_risk_profile("aggressive", {})
     close = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
     books = {
-        "T-1": CoreOB(bids={55: 10.0}, asks={57: 5.0}),
-        "T-2": CoreOB(bids={55: 10.0}, asks={57: 5.0}),
+        "T-1": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
+        "T-2": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
+        "T-3": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
     }
     meta = {
         "T-1": {"close_time": close, "volume_24h": 100},
         "T-2": {"close_time": close, "volume_24h": 100},
+        "T-3": {"close_time": close, "volume_24h": 100},
     }
     signal = evaluate_sell_side("E-1", books, meta, fm, rp)
     assert signal is not None
