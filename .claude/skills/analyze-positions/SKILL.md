@@ -15,7 +15,7 @@ The bot trades several strategies. Positions can be:
 - **Expiring today at $0.01**: leave them; closing costs more in fees than it saves.
 - **Partial fills**: one leg filled, others didn't. Close immediately.
 
-Coverage guard thresholds (matching `evaluate_buy_side` in `src/engine.py`):
+Coverage guard thresholds (matching `evaluate_buy_side` in `src/core/engine.py`):
 - ask_sum < 0.60 → suspect incomplete registration
 - max_ask < 0.20 → no dominant outcome registered
 

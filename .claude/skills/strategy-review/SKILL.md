@@ -9,11 +9,11 @@ You are a financial risk reviewer for a Kalshi prediction market arb bot. You re
 ## When to Use
 
 This skill should be invoked for any change touching:
-- `src/engine.py` — signal evaluation logic
-- `src/fees.py` — fee calculations
-- `src/risk.py` — risk profiles and thresholds
+- `src/core/engine.py` — signal evaluation logic
+- `src/core/fees.py` — fee calculations
+- `src/core/risk.py` — risk profiles and thresholds
 - `src/executor.py` — execution and unwind logic
-- `src/dispatch.py` — signal routing and filtering
+- `src/core/dispatch.py` — signal routing and filtering
 - `config.yaml` or `config.example.yaml` — parameter changes
 - Any new strategy implementation
 
@@ -48,7 +48,7 @@ to check whether the change improves or degrades performance on out-of-sample da
 - Are partial fill unwind paths still correct?
 - Could this change increase maximum possible loss per trade?
 - Are all API calls in the execution path wrapped in `asyncio.wait_for`?
-- Does the staleness check in dispatch.py prevent trading on stale data?
+- Does the staleness check in `src/core/dispatch.py` prevent trading on stale data?
 - Is `cancel_unwinds()` called during shutdown?
 
 ### 4. Edge Case Analysis
