@@ -224,6 +224,13 @@ class ExecutionManager:
                     ticker, round(price * 100), qty, prev_oid, unwind_action)
                 if filled:
                     logger.info("Unwind phase %d filled for %s @ %.2f", phase_i, ticker, price)
+                    if prev_oid:
+                        self._processed_fill_ids.add(prev_oid)
+                    self.positions.record_fill(
+                        ticker=ticker, side="yes",
+                        price=unwind_price, quantity=qty,
+                        action=unwind_action,
+                    )
                     break
 
             # loss = what we paid − what we recovered (direction-agnostic)

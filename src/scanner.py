@@ -106,7 +106,10 @@ class MarketScanner:
             attempt += 1
             try:
                 headers = self.auth.build_headers("GET", "/trade-api/ws/v2")
-                self._ws = await websockets.connect(self.ws_url, additional_headers=headers)
+                self._ws = await websockets.connect(
+                    self.ws_url, additional_headers=headers,
+                    ping_interval=20, ping_timeout=60,
+                )
                 self._running = True
                 if attempt > 1:
                     logger.info("WebSocket connected after %d attempts", attempt)
