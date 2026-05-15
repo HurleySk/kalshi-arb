@@ -161,3 +161,50 @@ recording:
     assert cfg.recording_db_path == "custom/path.db"
     assert cfg.recording_snapshot_interval_secs == 10
     assert cfg.recording_balance_poll_interval_secs == 600
+
+
+def test_retention_config_defaults(tmp_path):
+    """Retention and log rotation config should have defaults when omitted."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+mode: demo
+credentials:
+  demo:
+    api_key_id: test
+    private_key_path: /tmp/fake.pem
+strategy:
+  risk_mode: conservative
+""")
+    cfg = load_config(str(cfg_file))
+    assert cfg.retention_max_db_size_mb == 5000
+    assert cfg.retention_min_sessions == 1
+    assert cfg.cleanup_interval_secs == 1800
+    assert cfg.log_max_file_size_mb == 5
+    assert cfg.log_max_backup_count == 5
+
+
+def test_retention_config_custom(tmp_path):
+    """Retention config should read custom values from yaml."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+mode: demo
+credentials:
+  demo:
+    api_key_id: test
+    private_key_path: /tmp/fake.pem
+strategy:
+  risk_mode: conservative
+recording:
+  retention_max_db_size_mb: 2000
+  retention_min_sessions: 3
+  cleanup_interval_secs: 900
+logging:
+  max_file_size_mb: 10
+  max_backup_count: 3
+""")
+    cfg = load_config(str(cfg_file))
+    assert cfg.retention_max_db_size_mb == 2000
+    assert cfg.retention_min_sessions == 3
+    assert cfg.cleanup_interval_secs == 900
+    assert cfg.log_max_file_size_mb == 10
+    assert cfg.log_max_backup_count == 3
