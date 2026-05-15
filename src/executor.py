@@ -114,6 +114,24 @@ class ExecutionManager:
                         action=inner.get("action", "sell"),
                     )
 
+            is_buy_side = signal.leg_actions and all(a == "buy" for a in signal.leg_actions)
+            if is_buy_side and len(execution.filled) < len(execution.order_ids):
+                resting_ids = [oid for oid in execution.order_ids if oid not in execution.filled]
+                if resting_ids:
+                    logger.warning(
+                        "Buy-side resting legs detected for %s: %d/%d filled, cancelling %d immediately",
+                        signal.event_ticker, len(execution.filled), len(execution.order_ids), len(resting_ids),
+                    )
+                    await self.api.batch_cancel_orders(resting_ids)
+                    if execution.filled:
+                        logger.error(
+                            "PARTIAL FILL on %s: %d legs filled, %d cancelled — UNHEDGED EXPOSURE",
+                            signal.event_ticker, len(execution.filled), len(resting_ids),
+                        )
+                        self._failed_events.add(signal.event_ticker)
+                        await self._unwind_partial_fill(execution)
+                    return
+
             await self._monitor_fills(execution)
         except Exception:
             logger.exception("Failed to execute arb on %s", signal.event_ticker)
@@ -198,18 +216,23 @@ class ExecutionManager:
             if qty <= 0:
                 continue
             logger.warning("Unwinding %d contracts of %s (filled @ %.2f)", qty, ticker, fill_price)
+            phase2_wait = self._unwind_phase2_secs - self._unwind_phase1_secs
             if unwind_action == "buy":  # closing a short (original leg was a sell)
                 phases = [
                     (lambda fp, s=step: min(fp + s, 0.99), 0),
                     (lambda fp, s=step: min(fp + 2 * s, 0.99), self._unwind_phase1_secs),
-                    (lambda fp: 0.99, self._unwind_phase2_secs - self._unwind_phase1_secs),
+                    (lambda fp, s=step: min(fp + 4 * s, 0.99), phase2_wait),
+                    (lambda fp, s=step: max(min(fp + (1.0 - fp) * 0.5, 0.99), fp + 4 * s), self._unwind_phase2_secs),
+                    (lambda fp: 0.99, self._unwind_phase2_secs),
                 ]
                 fallback = 0.99
             else:  # closing a long (original leg was a buy)
                 phases = [
                     (lambda fp, s=step: max(fp - s, 0.01), 0),
                     (lambda fp, s=step: max(fp - 2 * s, 0.01), self._unwind_phase1_secs),
-                    (lambda fp: 0.01, self._unwind_phase2_secs - self._unwind_phase1_secs),
+                    (lambda fp, s=step: max(fp - 4 * s, 0.01), phase2_wait),
+                    (lambda fp, s=step: min(max(fp * 0.5, 0.01), max(fp - 4 * s, 0.01)), self._unwind_phase2_secs),
+                    (lambda fp: 0.01, self._unwind_phase2_secs),
                 ]
                 fallback = 0.01
 
@@ -239,7 +262,7 @@ class ExecutionManager:
             else:
                 self._record_unwind_loss(ticker, unwind_price, fill_price, qty)
             if not filled:
-                logger.error("Unwind phase 3 STILL RESTING for %s — loss estimated", ticker)
+                logger.error("All %d unwind phases exhausted for %s — last order still resting, loss estimated", len(phases), ticker)
             logger.warning("Unwind complete for %s: final @ $%.2f", ticker, unwind_price)
 
     def handle_fill(self, fill_data: dict):

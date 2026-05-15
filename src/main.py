@@ -251,29 +251,50 @@ class ArbBot:
             "CIRCUIT BREAKER TRIPPED — session loss: $%.4f. Cancelling all orders and closing positions.",
             self.executor.session_realized_loss,
         )
-        try:
-            if self.maker:
-                await self.maker.cancel_all()
-            orders_resp = await self.api.get_open_orders()
-            resting = [o for o in orders_resp.get("orders", [])
-                       if o.get("status") in ("resting", "pending", "open")]
-            if resting:
-                await self.api.batch_cancel_orders([o["order_id"] for o in resting])
-                logger.info("Cancelled %d open orders", len(resting))
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if self.maker:
+                    await self.maker.cancel_all()
+            except Exception:
+                logger.warning("Failed to cancel maker orders (attempt %d)", attempt + 1)
 
-            positions_resp = await self.api.get_positions()
-            close_orders = []
-            for mp in positions_resp.get("market_positions", []):
-                qty = int(float(mp.get("position_fp", "0")))
-                if qty != 0:
-                    close_orders.append(self.api.build_close_order(mp["ticker"], qty))
-            if close_orders:
-                await self.api.batch_create_orders(close_orders)
-                logger.info("Sent %d close orders", len(close_orders))
-            else:
-                logger.info("No positions to close")
-        except Exception:
-            logger.exception("Error during emergency shutdown")
+            try:
+                orders_resp = await self.api.get_open_orders()
+                resting = [o for o in orders_resp.get("orders", [])
+                           if o.get("status") in ("resting", "pending", "open")]
+                if resting:
+                    await self.api.batch_cancel_orders([o["order_id"] for o in resting])
+                    logger.info("Cancelled %d open orders", len(resting))
+            except Exception:
+                logger.warning("Failed to cancel open orders (attempt %d)", attempt + 1)
+
+            try:
+                positions_resp = await self.api.get_positions()
+                close_orders = []
+                for mp in positions_resp.get("market_positions", []):
+                    qty = int(float(mp.get("position_fp", "0")))
+                    if qty != 0:
+                        close_orders.append(self.api.build_close_order(mp["ticker"], qty))
+                if close_orders:
+                    await self.api.batch_create_orders(close_orders)
+                    logger.info("Sent %d close orders", len(close_orders))
+                else:
+                    logger.info("No positions to close")
+                return
+            except Exception:
+                if attempt == max_retries - 1:
+                    logger.critical(
+                        "Emergency shutdown failed after %d attempts — manual intervention required",
+                        max_retries,
+                    )
+                else:
+                    wait = 2 ** attempt + 1
+                    logger.warning(
+                        "Emergency shutdown attempt %d failed, retrying in %ds",
+                        attempt + 1, wait,
+                    )
+                    await asyncio.sleep(wait)
 
     async def _report_status(self):
         while True:

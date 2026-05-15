@@ -127,6 +127,57 @@ def test_pending_execution_prevents_duplicate():
     bot.engine.evaluate.assert_not_called()
 
 
+def test_emergency_shutdown_retries_on_rate_limit():
+    """Emergency shutdown should retry the full sequence on 429."""
+    import aiohttp
+    bot = _make_bot()
+    bot.executor.session_realized_loss = 1.0
+    bot.maker = None
+
+    call_count = {"n": 0}
+    async def mock_batch_create(orders):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise aiohttp.ClientResponseError(
+                request_info=MagicMock(), history=(),
+                status=429, message="Too Many Requests",
+            )
+        return {"orders": []}
+
+    bot.api.get_open_orders = AsyncMock(return_value={"orders": []})
+    bot.api.get_positions = AsyncMock(return_value={"market_positions": [
+        {"ticker": "T1", "position_fp": "1.00"},
+    ]})
+    bot.api.batch_create_orders = AsyncMock(side_effect=mock_batch_create)
+    bot.api.batch_cancel_orders = AsyncMock(return_value={})
+    bot.api.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
+
+    asyncio.run(bot._emergency_shutdown())
+
+    assert call_count["n"] == 2
+
+
+def test_emergency_shutdown_cancel_failure_doesnt_block_close():
+    """If cancelling orders fails, should still attempt to close positions."""
+    bot = _make_bot()
+    bot.executor.session_realized_loss = 1.0
+    bot.maker = None
+
+    bot.api.get_open_orders = AsyncMock(return_value={"orders": [
+        {"order_id": "r1", "status": "resting"},
+    ]})
+    bot.api.batch_cancel_orders = AsyncMock(side_effect=Exception("cancel failed"))
+    bot.api.get_positions = AsyncMock(return_value={"market_positions": [
+        {"ticker": "T1", "position_fp": "1.00"},
+    ]})
+    bot.api.batch_create_orders = AsyncMock(return_value={"orders": []})
+    bot.api.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
+
+    asyncio.run(bot._emergency_shutdown())
+
+    bot.api.batch_create_orders.assert_called_once()
+
+
 def test_cleanup_expired_events():
     """Expired events should be removed from orderbook manager and metadata."""
     bot = _make_bot()
