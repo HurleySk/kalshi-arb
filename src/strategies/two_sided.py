@@ -83,7 +83,7 @@ class TwoSidedManager:
         price = round(min(0.99, bought_at + 0.01), 2)
         order = self.order_builder.build_sell_order(ticker, price, quantity)
         resp = await self.api.batch_create_orders([order])
-        oid = self.api.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
+        oid = self.order_builder.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
         if oid:
             self._unwind_order_ids.add(oid)
 
@@ -91,7 +91,7 @@ class TwoSidedManager:
         price = round(max(0.01, sold_at - 0.01), 2)
         order = self.order_builder.build_buy_order(ticker, price, quantity)
         resp = await self.api.batch_create_orders([order])
-        oid = self.api.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
+        oid = self.order_builder.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
         if oid:
             self._unwind_order_ids.add(oid)
 
