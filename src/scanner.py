@@ -167,10 +167,18 @@ class MarketScanner:
         self._fills_subscribed = True
         logger.info("Subscribed to fill channel")
 
+    def stop(self):
+        self._stopping = True
+        self._running = False
+
     async def _reconnect(self):
         logger.info("Reconnecting to WebSocket...")
         self._ws = None
-        await self.connect()
+        try:
+            await asyncio.wait_for(self.connect(), timeout=30)
+        except asyncio.TimeoutError:
+            logger.error("WebSocket reconnect timed out after 30s")
+            raise
         if self._stopping:
             return
         if self._fills_subscribed:

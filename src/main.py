@@ -463,11 +463,36 @@ class ArbBot:
             tasks.append(asyncio.create_task(self._snapshot_loop()))
             tasks.append(asyncio.create_task(self._balance_loop()))
 
+        shutdown_event = asyncio.Event()
+
+        def _signal_handler():
+            logger.info("Received shutdown signal")
+            shutdown_event.set()
+
+        loop = asyncio.get_event_loop()
+        import signal
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, _signal_handler)
+
         try:
-            await asyncio.gather(*tasks)
+            gather_task = asyncio.gather(*tasks)
+            shutdown_waiter = asyncio.create_task(shutdown_event.wait())
+            done, pending = await asyncio.wait(
+                [gather_task, shutdown_waiter],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if shutdown_waiter in done:
+                logger.info("Shutting down gracefully...")
+                gather_task.cancel()
+                try:
+                    await gather_task
+                except asyncio.CancelledError:
+                    pass
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
+            await self.executor.cancel_unwinds()
+            self.scanner.stop()
             self.recorder.end_session()
             self.recorder.close()
             self._print_summary()
