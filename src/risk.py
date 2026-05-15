@@ -26,6 +26,7 @@ class RiskProfile:
     two_sided_min_volume_24h: float = 50.0
     buy_side_max_horizon_hours: float = 0.0  # 0 = disabled
     min_buy_side_coverage: float = 0.0  # 0 = disabled; rejects ask_sum below this floor
+    maker_min_volume_24h: float = 0.0  # separate volume floor for maker (lower since makers create liquidity)
 
 
 PRESETS: dict[str, dict] = {
@@ -51,6 +52,7 @@ PRESETS: dict[str, dict] = {
         "two_sided_min_volume_24h": 50.0,
         "buy_side_max_horizon_hours": 336.0,  # 14 days
         "min_buy_side_coverage": 0.90,
+        "maker_min_volume_24h": 10.0,
     },
     "moderate": {
         "min_volume_24h": 10.0,
@@ -74,6 +76,7 @@ PRESETS: dict[str, dict] = {
         "two_sided_min_volume_24h": 10.0,
         "buy_side_max_horizon_hours": 720.0,  # 30 days
         "min_buy_side_coverage": 0.88,
+        "maker_min_volume_24h": 0.0,
     },
     "aggressive": {
         "min_volume_24h": 0.0,
@@ -97,6 +100,7 @@ PRESETS: dict[str, dict] = {
         "two_sided_min_volume_24h": 0.0,
         "buy_side_max_horizon_hours": 0.0,  # unlimited
         "min_buy_side_coverage": 0.85,
+        "maker_min_volume_24h": 0.0,
     },
 }
 

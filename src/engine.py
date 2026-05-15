@@ -31,6 +31,7 @@ class ArbEngine:
         self.two_sided_min_volume_24h = risk_profile.two_sided_min_volume_24h
         self.buy_side_max_horizon_hours = risk_profile.buy_side_max_horizon_hours
         self.min_buy_side_coverage = risk_profile.min_buy_side_coverage
+        self.maker_min_volume_24h = risk_profile.maker_min_volume_24h
 
     def _days_to_expiry(self, market_metadata: dict[str, dict]) -> float | None:
         earliest = None
@@ -170,7 +171,10 @@ class ArbEngine:
         orderbooks: dict[str, Orderbook],
         market_metadata: dict[str, dict] | None = None,
     ) -> TradeSignal | None:
-        legs = self._validate_legs(orderbooks, market_metadata, event_ticker=event_ticker)
+        legs = self._validate_legs(
+            orderbooks, market_metadata, event_ticker=event_ticker,
+            min_volume_24h=self.maker_min_volume_24h,
+        )
         if legs is None:
             return None
 

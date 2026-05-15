@@ -26,6 +26,7 @@ def _make_engine(min_profit_pct=2.0, max_exposure_ratio=3.0, **kwargs):
         min_open_interest=kwargs.get("min_open_interest", 0.0),
         min_liquidity=kwargs.get("min_liquidity", 0.0),
         min_buy_side_coverage=kwargs.get("min_buy_side_coverage", 0.0),
+        maker_min_volume_24h=kwargs.get("maker_min_volume_24h", 0.0),
     )
     return ArbEngine(
         risk_profile=profile,
@@ -214,6 +215,27 @@ def test_evaluate_maker_respects_volume_check():
             "M2": {"volume_24h": 500, "close_time": _future_iso(0.5)},
             "M3": {"volume_24h": 500, "close_time": _future_iso(0.5)}}
     assert engine.evaluate_maker("E1", orderbooks, market_metadata=meta) is None
+
+
+def test_evaluate_maker_uses_separate_volume_threshold():
+    """Maker should use maker_min_volume_24h, not the taker min_volume_24h."""
+    engine = _make_engine(
+        min_profit_pct=1.0, max_exposure_ratio=100.0,
+        min_volume_24h=50.0,
+        maker_min_volume_24h=0.0,
+        maker_max_horizon_hours=24.0,
+    )
+    close = _future_iso(0.02)  # ~30 minutes, within 24h horizon
+    orderbooks = {"M1": _ob([(0.35, 100)]), "M2": _ob([(0.35, 100)]), "M3": _ob([(0.35, 100)])}
+    meta = {"M1": {"volume_24h": 5, "close_time": close},
+            "M2": {"volume_24h": 5, "close_time": close},
+            "M3": {"volume_24h": 5, "close_time": close}}
+    # Taker should reject (volume 5 < min 50)
+    assert engine.evaluate("E1", orderbooks, market_metadata=meta) is None
+    # Maker should accept (maker_min_volume_24h=0)
+    signal = engine.evaluate_maker("E1", orderbooks, market_metadata=meta)
+    assert signal is not None
+    assert signal.signal_type == "maker"
 
 
 def test_evaluate_maker_respects_depth_check():

@@ -72,6 +72,7 @@ def load_config(path: str) -> Config:
         "near_term_hours", "hurdle_rate_annual_pct",
         "unwind_phase1_secs", "unwind_phase2_secs", "unwind_price_step_cents",
         "min_open_interest", "min_liquidity",
+        "maker_min_volume_24h",
     }
     strategy_overrides = {k: v for k, v in strategy.items() if k in override_keys}
 
