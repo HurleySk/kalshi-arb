@@ -144,7 +144,7 @@ async def get_positions() -> str:
 @mcp.tool()
 async def get_risk_profile() -> str:
     """Show the active risk profile and all thresholds."""
-    from src.risk import load_risk_profile
+    from src.core.risk import load_risk_profile
     cfg = load_config(CONFIG_PATH)
     profile = load_risk_profile(cfg.risk_mode, cfg.strategy_overrides)
 
@@ -177,7 +177,7 @@ async def get_performance_report(days: int = 7) -> str:
         days: Number of days to look back (default: 7)
     """
     import time as _time
-    from src.analytics import Analytics
+    from src.core.analytics import Analytics
     cfg = load_config(CONFIG_PATH)
     db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
     analytics = Analytics(db_path)
@@ -208,7 +208,7 @@ async def get_parameter_sensitivity(
         days: Days of data to use (default: 7)
     """
     import time as _time
-    from src.replay import ReplayEngine
+    from src.core.replay import ReplayEngine
     cfg = load_config(CONFIG_PATH)
     db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
     engine = ReplayEngine(db_path, risk_mode=cfg.risk_mode)
@@ -258,7 +258,7 @@ async def get_near_misses(
         days: Days to look back (default: 1)
     """
     import time as _time
-    from src.analytics import Analytics
+    from src.core.analytics import Analytics
     cfg = load_config(CONFIG_PATH)
     db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
     analytics = Analytics(db_path)
@@ -349,7 +349,7 @@ async def get_replay_comparison(
         days: Days of data to use (default: 7)
     """
     import time as _time
-    from src.replay import ReplayEngine
+    from src.core.replay import ReplayEngine
     cfg = load_config(CONFIG_PATH)
     db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
     engine = ReplayEngine(db_path, risk_mode=cfg.risk_mode)

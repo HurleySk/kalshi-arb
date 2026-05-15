@@ -55,8 +55,8 @@ def _setup_boot_reconcile(bot, *, open_orders=None, positions=None):
     bot.api.batch_create_orders = AsyncMock(return_value={"orders": [
         {"order": {"order_id": "x", "status": "executed", "ticker": "T", "yes_price_dollars": "0.99"}}
     ]})
-    bot.api.build_close_order = MagicMock(return_value={"ticker": "T", "action": "buy"})
-    bot.api.unwrap_order = MagicMock(return_value={"status": "executed"})
+    bot.order_builder.build_close_order = MagicMock(return_value={"ticker": "T", "action": "buy"})
+    bot.order_builder.unwrap_order = MagicMock(return_value={"status": "executed"})
     bot.positions.load_position = MagicMock()
 
 
@@ -93,7 +93,7 @@ def test_boot_reconcile_closes_shorts():
     _setup_boot_reconcile(bot, positions=positions)
     asyncio.run(bot._boot_reconcile())
     bot.positions.load_position.assert_not_called()
-    bot.api.build_close_order.assert_called_once_with("M_SHORT", -1)
+    bot.order_builder.build_close_order.assert_called_once_with("M_SHORT", -1)
     bot.api.batch_create_orders.assert_called_once()
 
 
@@ -108,7 +108,7 @@ def test_boot_reconcile_handles_mixed_state():
     asyncio.run(bot._boot_reconcile())
     bot.api.batch_cancel_orders.assert_called_once_with(["ORD1"])
     bot.positions.load_position.assert_called_once_with("LONG1", "yes", 3)
-    bot.api.build_close_order.assert_called_once_with("SHORT1", -1)
+    bot.order_builder.build_close_order.assert_called_once_with("SHORT1", -1)
 
 
 def test_pending_execution_prevents_duplicate():
@@ -171,7 +171,7 @@ def test_emergency_shutdown_retries_on_rate_limit():
     ]})
     bot.api.batch_create_orders = AsyncMock(side_effect=mock_batch_create)
     bot.api.batch_cancel_orders = AsyncMock(return_value={})
-    bot.api.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
+    bot.order_builder.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
 
     asyncio.run(bot._emergency_shutdown())
 
@@ -193,7 +193,7 @@ def test_emergency_shutdown_cancel_failure_doesnt_block_close():
         {"ticker": "T1", "position_fp": "1.00"},
     ]})
     bot.api.batch_create_orders = AsyncMock(return_value={"orders": []})
-    bot.api.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
+    bot.order_builder.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
 
     asyncio.run(bot._emergency_shutdown())
 
