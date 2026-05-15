@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from src.core.models import Orderbook, TradeSignal
 from src.core.risk import RiskProfile
@@ -8,6 +9,8 @@ from src.ports.constraints import PositionConstraints
 from src.strategies import taker, near_expiry, monotone
 
 logger = logging.getLogger(__name__)
+
+MAKER_MAX_EXPOSURE_RATIO = 50.0
 
 
 class ArbEngine:
@@ -89,7 +92,7 @@ class ArbEngine:
         market_metadata: dict[str, dict] | None = None,
     ) -> TradeSignal | None:
         if market_metadata is None:
-            market_metadata = {}
+            return None
 
         legs: list[tuple[str, float]] = []
         for ticker, book in orderbooks.items():
@@ -106,14 +109,43 @@ class ArbEngine:
             vol = meta.get("volume_24h", 0)
             if vol < self.risk_profile.maker_min_volume_24h:
                 return None
+            if self.risk_profile.min_open_interest > 0:
+                if meta.get("open_interest", 0) < self.risk_profile.min_open_interest:
+                    return None
+            if self.risk_profile.min_liquidity > 0:
+                if meta.get("liquidity", 0) < self.risk_profile.min_liquidity:
+                    return None
 
         bid_prices = [p for _, p in legs]
+        bid_sum = sum(bid_prices)
         profit = maker_arb_profit(bid_prices, self.fee_model)
         if profit <= 0:
+            if bid_sum >= 0.95:
+                logger.debug("maker near-miss %s: bid_sum=%.4f", event_ticker, bid_sum)
             return None
 
         profit_pct = profit * 100.0
+        if profit_pct < self.risk_profile.min_profit_pct:
+            return None
+
+        event_meta = {t: market_metadata.get(t, {}) for t, _ in legs}
+        days = _days_to_expiry(event_meta)
+        if days is None:
+            return None
+        if days > self.maker_max_horizon_hours / 24:
+            logger.debug(
+                "maker horizon-filtered %s: bid_sum=%.4f profit_pct=%.1f%% closes_in=%.1fh horizon=%.1fh",
+                event_ticker, bid_sum, profit_pct, days * 24, self.maker_max_horizon_hours,
+            )
+            return None
+        if days > self.risk_profile.near_term_hours / 24:
+            annualized = profit_pct * (365 / days)
+            if annualized < self.risk_profile.hurdle_rate_annual_pct:
+                return None
+
         exp_ratio = maker_exposure_ratio(bid_prices, self.fee_model)
+        if exp_ratio > MAKER_MAX_EXPOSURE_RATIO:
+            return None
 
         return TradeSignal(
             event_ticker=event_ticker,
@@ -141,19 +173,39 @@ class ArbEngine:
             return None
 
         spread_cents = round((best_ask - best_bid) * 100)
-        min_spread = self.risk_profile.two_sided_min_spread_cents + 2
-        if spread_cents < min_spread:
+        if spread_cents < self.risk_profile.two_sided_min_spread_cents + 2:
             return None
 
-        our_bid = best_bid + 0.01
-        our_ask = best_ask - 0.01
+        post_bid = round(best_bid + 0.01, 2)
+        post_ask = round(best_ask - 0.01, 2)
+
+        if post_bid >= post_ask:
+            return None
 
         return TradeSignal(
             event_ticker=ticker,
-            legs=[(ticker, our_bid), (ticker, our_ask)],
-            net_profit=our_ask - our_bid,
-            profit_pct=(our_ask - our_bid) * 100.0,
+            legs=[(ticker, post_bid), (ticker, post_ask)],
+            net_profit=round(post_ask - post_bid, 4),
+            profit_pct=round((post_ask - post_bid) * 100, 2),
             exposure_ratio=0.0,
             signal_type="two_sided",
+            quantity=1,
             leg_actions=["buy", "sell"],
         )
+
+
+def _days_to_expiry(market_metadata: dict[str, dict]) -> float | None:
+    now = datetime.now(timezone.utc)
+    earliest = None
+    for meta in market_metadata.values():
+        close_str = meta.get("close_time", "")
+        if not close_str:
+            continue
+        try:
+            close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
+            days = (close_dt - now).total_seconds() / 86400
+            if days > 0 and (earliest is None or days < earliest):
+                earliest = days
+        except (ValueError, TypeError):
+            continue
+    return earliest
