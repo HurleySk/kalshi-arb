@@ -1,12 +1,67 @@
 ---
 name: live-test
 description: Use when you want to run a timed live test of the arb bot, monitor it in real time, and analyze the results. Covers startup, monitoring, shutdown, and log analysis.
-argument-hint: "[duration=90] [help]"
+argument-hint: "[duration=90] [max_loss=0.10] [max_errors=3] [help]"
 ---
 
 You are an expert at running and analyzing live tests of the Kalshi arb bot. Follow the workflow below exactly.
 
 **CRITICAL: After EVERY live test, you MUST run the `analyze-positions` skill. This is not optional. Live tests can create positions. Do not skip this step.**
+
+## Intervention Parameters
+
+These parameters control when you MUST stop the bot early, kill it, unwind positions, and begin analysis. They can be overridden by the user on invocation.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_loss` | `$0.10` | Cumulative realized + unrealized loss. Stop immediately if exceeded. |
+| `max_errors` | `3` | Consecutive ERROR-level log lines (not warnings). Stop and investigate. |
+| `max_partial_fills` | `2` | Total partial fill events during the test. Stop — likely liquidity problem. |
+| `max_unwind_time` | `60` | Seconds any single unwind is running. If exceeded, kill bot and manually close. |
+| `circuit_breaker` | `stop` | Action when circuit breaker trips: `stop` (kill bot) or `continue` (let bot handle it). |
+
+**Override syntax:** `/live-test 300 max_loss=0.50 max_errors=5`
+
+### Intervention Decision Tree
+
+During monitoring (Step 3), evaluate EVERY log line against these rules in priority order:
+
+```
+1. circuit_breaker=triggered → action per circuit_breaker param (default: stop)
+2. UNWIND TIMEOUT or unwind running > max_unwind_time → STOP IMMEDIATELY
+3. Cumulative loss > max_loss → STOP IMMEDIATELY
+4. Consecutive errors >= max_errors → STOP AND INVESTIGATE
+5. Partial fill count >= max_partial_fills → STOP AND INVESTIGATE
+6. Python traceback / unhandled exception → STOP AND INVESTIGATE
+7. Bot process exited unexpectedly → BEGIN ANALYSIS (skip Step 4)
+```
+
+**STOP IMMEDIATELY** means:
+1. Kill the bot process (`kill -TERM` first, `kill -9` after 5s if still alive)
+2. Wait 2 seconds for graceful shutdown
+3. Run `analyze-positions close-bad` to unwind any open positions
+4. THEN begin log analysis and investigation
+5. Report what triggered the intervention
+
+**STOP AND INVESTIGATE** means:
+1. Kill the bot process
+2. Run `analyze-positions close-bad` to unwind any open positions  
+3. Grep the log for the specific error pattern
+4. Diagnose root cause before reporting findings
+5. Include the diagnosis and proposed fix in your report
+
+### Loss Tracking During Monitoring
+
+Track cumulative loss in real time by watching for these log patterns:
+
+| Pattern | Loss Contribution |
+|---------|-------------------|
+| `arb_detected` / `buy_side_arb` with execution | Check `net_profit` field — negative = loss |
+| `PARTIAL_FILL` | Assume worst-case: sum of filled leg prices as loss until unwind completes |
+| `UNWIND` result | Actual unwind loss (replaces worst-case estimate) |
+| `circuit_breaker=triggered` | Check balance change from last STATUS line |
+
+If you cannot determine exact loss from logs, use the MCP tool `mcp__kalshi-arb__get_positions` to check current exposure and estimate unrealized P&L.
 
 ## Context
 
@@ -66,28 +121,41 @@ Look for `Starting Kalshi Arb Bot in LIVE mode`. If you see `Another instance is
 
 Use the Monitor tool on `/tmp/live_test.log` for the test duration (default 90 seconds).
 
+**While monitoring, actively track intervention state:**
+- `cumulative_loss = 0.0` — updated on every execution/unwind result
+- `consecutive_errors = 0` — reset on any non-error log line
+- `partial_fill_count = 0` — incremented on each PARTIAL_FILL event
+- `unwind_start_time = None` — set when unwind begins, cleared when it ends
+
+**On EVERY log line, run the Intervention Decision Tree (see above).** If any threshold is breached, abort monitoring immediately and follow the STOP procedure. Do not wait for the next STATUS line or the test duration to expire.
+
 Key log patterns to watch for:
 
-| Pattern | Meaning |
-|---------|---------|
-| `STATUS \|` | Periodic health summary — note events, arbs_detected, maker_horizon counts |
-| `arb_detected` | Taker arb fired — note event ticker and profit |
-| `buy_side` | Buy-side arb fired |
-| `near_expiry` | Near-expiry taker arb fired |
-| `monotone_arb_detected` | Monotone pair arb fired |
-| `coverage-filtered` | Buy-side rejected by two-guard filter (expected behavior) |
-| `near-miss` | Profitable but filtered — useful for tuning |
-| `maker horizon-filtered` | Maker arb rejected by horizon limit |
-| `ERROR` / `Exception` | Bug or API error — note and investigate |
-| `circuit_breaker` | Check if `circuit_breaker=ok` or triggered |
-| `WebSocket` | Disconnects or reconnects |
-| `stale orderbook` | Orderbook data >5s old for a market — signal evaluation skipped |
-| `UNWIND TIMEOUT` | Unwind process exceeded max time — manual check needed |
-| `timed out` | An API call exceeded its timeout — check connectivity |
+| Pattern | Meaning | Intervention? |
+|---------|---------|---------------|
+| `STATUS \|` | Periodic health summary — note events, arbs_detected, maker_horizon counts | Check balance for loss tracking |
+| `arb_detected` | Taker arb fired — note event ticker and profit | Track profit/loss |
+| `buy_side` | Buy-side arb fired | Track profit/loss |
+| `near_expiry` | Near-expiry taker arb fired | Track profit/loss |
+| `monotone_arb_detected` | Monotone pair arb fired | Track profit/loss |
+| `PARTIAL_FILL` | Partial fill occurred | Increment partial_fill_count |
+| `UNWIND` | Unwind started/completed | Track unwind duration |
+| `UNWIND TIMEOUT` | Unwind process exceeded max time | **STOP IMMEDIATELY** |
+| `circuit_breaker=triggered` | Circuit breaker tripped | **STOP per param** |
+| `ERROR` / `Exception` | Bug or API error | Increment consecutive_errors |
+| `Traceback` | Unhandled Python exception | **STOP AND INVESTIGATE** |
+| `coverage-filtered` | Buy-side rejected by two-guard filter (expected behavior) | No |
+| `near-miss` | Profitable but filtered — useful for tuning | No |
+| `maker horizon-filtered` | Maker arb rejected by horizon limit | No |
+| `WebSocket` | Disconnects or reconnects | No (unless repeated >3x in 60s) |
+| `stale orderbook` | Orderbook data >5s old for a market — signal evaluation skipped | No |
+| `timed out` | An API call exceeded its timeout — check connectivity | Increment consecutive_errors |
 
 ### Step 4: Stop the bot
 
-After the test duration:
+Whether the test duration expired normally or an intervention threshold was breached:
+
+**Normal stop (duration expired):**
 ```bash
 if [ -f /tmp/kalshi-arb.pid ]; then
     kill $(cat /tmp/kalshi-arb.pid)
@@ -96,6 +164,22 @@ else
 fi
 sleep 2
 ```
+
+**Intervention stop (threshold breached):**
+```bash
+# SIGTERM first for graceful shutdown
+if [ -f /tmp/kalshi-arb.pid ]; then
+    kill $(cat /tmp/kalshi-arb.pid)
+else
+    pkill -f "python3 -m src.main" || true
+fi
+sleep 5
+# If still alive, force kill
+pgrep -f "src.main" && kill -9 $(pgrep -f "src.main") || true
+sleep 1
+```
+
+After an intervention stop, note the trigger reason (which threshold was breached, the exact log line) before proceeding to Step 5.
 
 ### Step 5: Analyze the log
 
@@ -154,21 +238,33 @@ If the bot ran for more than 60 seconds and analytics recording is enabled, also
 **Confirm Step 6 is complete before writing findings.** If you have not yet run `/analyze-positions close-bad`, do it now before proceeding.
 
 Summarize:
-1. Test duration and events monitored
-2. Arbs detected vs executed vs failed
-3. Any errors or unexpected behavior
-4. Coverage filter performance (how many events it blocked)
-5. Positions found and what was closed
-6. Recommended next steps (tuning thresholds, fixing bugs, etc.)
+1. **Test outcome**: completed normally OR intervention triggered (which threshold, exact log line)
+2. Test duration (actual, not requested if stopped early) and events monitored
+3. Arbs detected vs executed vs failed
+4. **Loss tracking**: cumulative realized loss, any unrealized exposure, positions unwound
+5. **Partial fills**: count, which events, unwind outcomes
+6. Any errors or unexpected behavior
+7. Coverage filter performance (how many events it blocked)
+8. Positions found and what was closed
+9. Recommended next steps (tuning thresholds, fixing bugs, etc.)
+
+If the test was stopped by intervention, the findings report MUST lead with:
+```
+⚠️ INTERVENTION: Test stopped early after {duration}s
+   Trigger: {parameter} breached ({actual_value} > {threshold})
+   Log line: {exact line that triggered the stop}
+```
 
 ## Commands
 
-### `[duration=90]` (default)
+### `[duration=90] [param=value ...]` (default)
 
-Run the full workflow above for the specified duration in seconds. Examples:
-- `/live-test` — 90-second test
+Run the full workflow above for the specified duration in seconds, with optional intervention parameter overrides. Examples:
+- `/live-test` — 90-second test, default thresholds
 - `/live-test 120` — 2-minute test
-- `/live-test 300` — 5-minute test
+- `/live-test 300 max_loss=0.50` — 5-minute test, tolerate up to $0.50 loss
+- `/live-test 3600 max_loss=1.00 max_errors=5 max_partial_fills=3` — 1-hour soak test with relaxed thresholds
+- `/live-test 120 circuit_breaker=continue` — let the bot handle circuit breaker events internally
 
 ### `help`
 
