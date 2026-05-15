@@ -7,6 +7,7 @@ from typing import Callable
 import websockets
 
 from src.exchanges.kalshi.auth import KalshiAuth
+from src.core.orderbook_manager import OrderbookManager
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class MarketScanner:
         self,
         ws_url: str,
         auth: KalshiAuth,
-        orderbook_mgr,
+        orderbook_mgr: OrderbookManager,
         on_orderbook_update: Callable[[str], None] | None = None,
         on_fill: Callable[[dict], None] | None = None,
     ):
