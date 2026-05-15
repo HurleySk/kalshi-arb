@@ -955,3 +955,31 @@ def test_core_engine_two_sided_signal():
     assert signal is not None
     assert signal.signal_type == "two_sided"
     assert signal.leg_actions == ["buy", "sell"]
+
+
+def test_taker_rejects_far_dated_below_hurdle():
+    from src.core.models import Orderbook as CoreOB
+    from src.core.risk import load_risk_profile
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    from src.strategies.taker import evaluate_sell_side
+
+    fm = KalshiFeeModel()
+    rp = load_risk_profile("aggressive", {})
+    books = {
+        "T-1": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
+        "T-2": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
+        "T-3": CoreOB(bids={40: 10.0}, asks={42: 5.0}),
+    }
+    meta = {
+        "T-1": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+        "T-2": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+        "T-3": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+    }
+    signal = evaluate_sell_side("E-1", books, meta, fm, rp)
+    assert signal is None
+
+
+def test_core_orderbook_manager_market_age_unregistered():
+    from src.core.orderbook_manager import OrderbookManager as CoreOBM
+    mgr = CoreOBM()
+    assert mgr.market_age("NONEXISTENT") == float("inf")
