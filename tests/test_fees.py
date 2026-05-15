@@ -109,3 +109,78 @@ def test_monotone_pair_profit_exact():
     ub, la = 0.65, 0.50
     expected = (ub - la) - taker_fee(ub) - taker_fee(la)
     assert abs(monotone_pair_profit(ub, la) - expected) < 1e-9
+
+
+# --- Core fees (src/core/fees.py) tests ---
+
+
+class MockFeeModel:
+    """Kalshi-equivalent fee model for testing."""
+    def taker_fee(self, price: float) -> float:
+        return 0.07 * price * (1.0 - price)
+    def maker_fee(self, price: float) -> float:
+        return 0.0
+    def profit_fee(self, gross_profit: float) -> float:
+        return 0.0
+
+
+class ProfitTaxFeeModel:
+    """PredictIt-style: 10% profit fee, no per-trade fees."""
+    def taker_fee(self, price: float) -> float:
+        return 0.0
+    def maker_fee(self, price: float) -> float:
+        return 0.0
+    def profit_fee(self, gross_profit: float) -> float:
+        return 0.10 * gross_profit
+
+
+def test_core_arb_profit_kalshi():
+    from src.core.fees import arb_profit
+    fm = MockFeeModel()
+    profit = arb_profit([0.40, 0.40, 0.40], fm)
+    expected_gross = 1.20 - 1.0
+    expected_fees = 3 * 0.07 * 0.40 * 0.60
+    assert abs(profit - (expected_gross - expected_fees)) < 1e-9
+
+
+def test_core_arb_profit_predictit():
+    from src.core.fees import arb_profit
+    fm = ProfitTaxFeeModel()
+    profit = arb_profit([0.40, 0.40, 0.40], fm)
+    gross = 0.20
+    expected = gross - 0.10 * gross
+    assert abs(profit - expected) < 1e-9
+
+
+def test_core_buy_side_arb_profit():
+    from src.core.fees import buy_side_arb_profit
+    fm = MockFeeModel()
+    profit = buy_side_arb_profit([0.20, 0.30, 0.40], fm)
+    cost = 0.90
+    fees = sum(0.07 * p * (1 - p) for p in [0.20, 0.30, 0.40])
+    expected = 1.0 - cost - fees
+    assert abs(profit - expected) < 1e-9
+
+
+def test_core_maker_arb_profit():
+    from src.core.fees import maker_arb_profit
+    fm = MockFeeModel()
+    profit = maker_arb_profit([0.40, 0.40, 0.40], fm)
+    assert abs(profit - 0.20) < 1e-9
+
+
+def test_core_exposure_ratio():
+    from src.core.fees import exposure_ratio
+    fm = MockFeeModel()
+    ratio = exposure_ratio([0.40, 0.40, 0.40], fm)
+    assert ratio > 0
+    assert ratio < float("inf")
+
+
+def test_core_monotone_pair_profit():
+    from src.core.fees import monotone_pair_profit
+    fm = MockFeeModel()
+    profit = monotone_pair_profit(0.60, 0.40, fm)
+    gross = 0.60 - 0.40
+    fees = fm.taker_fee(0.60) + fm.taker_fee(0.40)
+    assert abs(profit - (gross - fees)) < 1e-9
