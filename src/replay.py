@@ -172,9 +172,9 @@ class ReplayEngine:
         """
         signal_count = 0
         total_profit = 0.0
+        seen: set[str] = set()
 
         for _ts, events in snapshots:
-            seen: set[str] = set()
             for event_ticker, orderbooks in events.items():
                 if event_ticker in seen:
                     continue

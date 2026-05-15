@@ -304,7 +304,7 @@ async def get_signal_history(
 
     end = _time.time()
     start = end - (days * 86400)
-    conditions = ["timestamp >= ?", "timestamp <= ?"]
+    conditions = ["ts >= ?", "ts <= ?"]
     params: list = [start, end]
     if strategy != "all":
         conditions.append("strategy = ?")
@@ -315,7 +315,7 @@ async def get_signal_history(
 
     where = " AND ".join(conditions)
     rows = conn.execute(
-        f"SELECT timestamp, event_ticker, strategy, outcome, bid_sum, profit_pct FROM signal_evaluations WHERE {where} ORDER BY timestamp DESC LIMIT ?",
+        f"SELECT ts, event_ticker, strategy, outcome, bid_sum, profit_pct FROM signal_evaluations WHERE {where} ORDER BY ts DESC LIMIT ?",
         params + [limit],
     ).fetchall()
     conn.close()

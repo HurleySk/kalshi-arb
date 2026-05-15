@@ -20,6 +20,23 @@ class Analytics:
     def __init__(self, db_path: str) -> None:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._has_tables = self._check_tables()
+
+    def _check_tables(self) -> bool:
+        tables = {r[0] for r in self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        return "signal_evaluations" in tables
+
+    def _query(self, sql: str, params: list | None = None) -> list[sqlite3.Row]:
+        if not self._has_tables:
+            return []
+        return self._conn.execute(sql, params or []).fetchall()
+
+    def _query_one(self, sql: str, params: list | None = None) -> sqlite3.Row | None:
+        if not self._has_tables:
+            return None
+        return self._conn.execute(sql, params or []).fetchone()
 
     # ------------------------------------------------------------------
     # Public API
@@ -45,7 +62,7 @@ class Analytics:
             {where}
             GROUP BY strategy, outcome
         """
-        rows = self._conn.execute(sql, params).fetchall()
+        rows = self._query(sql, params)
 
         result: dict[str, dict[str, int]] = {}
         for row in rows:
@@ -87,7 +104,7 @@ class Analytics:
             AND reject_reason IS NOT NULL
             GROUP BY reject_reason
         """
-        rows = self._conn.execute(sql, params).fetchall()
+        rows = self._query(sql, params)
         return {row["reject_reason"]: row["cnt"] for row in rows}
 
     def partial_fill_analysis(
@@ -109,7 +126,10 @@ class Analytics:
             FROM executions
             {where}
         """
-        row = self._conn.execute(sql, params).fetchone()
+        row = self._query_one(sql, params)
+        if row is None:
+            return {"total_executions": 0, "partial_count": 0, "partial_rate": 0.0,
+                    "total_unwind_cost": 0.0, "avg_unwind_cost": 0.0}
         total = row["total_executions"] or 0
         partial = row["partial_count"] or 0
         total_unwind = row["total_unwind_cost"] or 0.0
@@ -123,8 +143,8 @@ class Analytics:
                 {where}
                 AND result = 'partial_fill'
             """
-            avg_row = self._conn.execute(avg_sql, params).fetchone()
-            avg_unwind = avg_row["avg_cost"] or 0.0
+            avg_row = self._query_one(avg_sql, params)
+            avg_unwind = (avg_row["avg_cost"] or 0.0) if avg_row else 0.0
 
         return {
             "total_executions": total,
@@ -151,7 +171,7 @@ class Analytics:
             {where}
             ORDER BY ts ASC
         """
-        rows = self._conn.execute(sql, params).fetchall()
+        rows = self._query(sql, params)
         if not rows:
             return {
                 "start_cash_cents": None,
@@ -203,7 +223,7 @@ class Analytics:
             AND outcome = 'near_miss'
             GROUP BY strategy
         """
-        rows = self._conn.execute(sql, params).fetchall()
+        rows = self._query(sql, params)
         total = sum(r["cnt"] for r in rows)
         by_strategy = {r["strategy"]: r["cnt"] for r in rows}
 
@@ -218,7 +238,7 @@ class Analytics:
                 ORDER BY bid_sum DESC
                 LIMIT 1
             """
-            best_row = self._conn.execute(best_sql, params).fetchone()
+            best_row = self._query_one(best_sql, params)
             if best_row:
                 best_miss = {
                     "event_ticker": best_row["event_ticker"],
