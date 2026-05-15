@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class PositionConstraints(Protocol):
+    def max_position_size(self, ticker: str) -> int | None: ...
+    def max_total_exposure(self) -> float | None: ...
