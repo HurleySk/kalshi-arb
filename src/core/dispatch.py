@@ -3,8 +3,9 @@ import logging
 import time
 from datetime import datetime, timezone, timedelta
 
+from __future__ import annotations
+
 from src.core.engine import ArbEngine
-from src.executor import ExecutionManager
 from src.core.models import TradeSignal
 from src.core.orderbook_manager import OrderbookManager
 
