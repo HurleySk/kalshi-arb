@@ -11,10 +11,14 @@ session is active.  Writes are committed after each insert for durability.
 """
 
 import json
+import logging
+import os
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("kalshi-arb")
 
 
 _CREATE_SESSIONS = """
@@ -117,6 +121,7 @@ class DataRecorder:
         self._enabled = db_path is not None
         self._session_id: int | None = None
         self._conn: sqlite3.Connection | None = None
+        self._db_path: str | None = db_path if self._enabled else None
 
         if self._enabled:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +176,73 @@ class DataRecorder:
         )
         self._conn.commit()
         self._session_id = None
+
+    # ------------------------------------------------------------------
+    # Retention
+    # ------------------------------------------------------------------
+
+    def purge_old_sessions(self, max_db_size_mb: int, min_sessions: int) -> dict | None:
+        """Delete snapshots and signals from oldest sessions until DB is under size cap.
+
+        Returns summary dict if anything was purged, None otherwise.
+        Executions, fills, balances, and session rows are never deleted.
+        """
+        if not self._enabled or self._conn is None or self._db_path is None:
+            return None
+
+        db_size_bytes = os.path.getsize(self._db_path)
+        cap_bytes = max_db_size_mb * 1024 * 1024
+        if db_size_bytes <= cap_bytes:
+            return None
+
+        before_mb = db_size_bytes / (1024 * 1024)
+
+        sessions = self._conn.execute(
+            "SELECT id FROM sessions ORDER BY start_time ASC"
+        ).fetchall()
+        total_sessions = len(sessions)
+
+        purged_ids: list[int] = []
+        total_obs_deleted = 0
+        total_sig_deleted = 0
+
+        for (sid,) in sessions:
+            if total_sessions - len(purged_ids) <= min_sessions:
+                break
+            if os.path.getsize(self._db_path) <= cap_bytes:
+                break
+
+            obs_deleted = self._conn.execute(
+                "DELETE FROM orderbook_snapshots WHERE session_id = ?", (sid,)
+            ).rowcount
+            sig_deleted = self._conn.execute(
+                "DELETE FROM signal_evaluations WHERE session_id = ?", (sid,)
+            ).rowcount
+            self._conn.commit()
+
+            purged_ids.append(sid)
+            total_obs_deleted += obs_deleted
+            total_sig_deleted += sig_deleted
+
+        if not purged_ids:
+            return None
+
+        self._conn.execute("VACUUM")
+
+        after_mb = os.path.getsize(self._db_path) / (1024 * 1024)
+
+        summary = {
+            "sessions_purged": purged_ids,
+            "obs_deleted": total_obs_deleted,
+            "sig_deleted": total_sig_deleted,
+            "before_mb": round(before_mb, 1),
+            "after_mb": round(after_mb, 1),
+        }
+        logger.info("DB cleanup: purged %d session(s) — %d snapshots, %d signals removed. "
+                     "Size: %.1f MB → %.1f MB",
+                     len(purged_ids), total_obs_deleted, total_sig_deleted,
+                     before_mb, after_mb)
+        return summary
 
     # ------------------------------------------------------------------
     # Record helpers (all guard on _enabled and _session_id)

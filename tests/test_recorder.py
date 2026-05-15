@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import time
 
@@ -123,3 +124,104 @@ def test_recorder_disabled():
         profit_pct=2.5, exposure_ratio=1.5, legs=[], metadata=None,
     )
     # Should not raise — all methods are no-ops
+
+
+def _populate_sessions(recorder, num_sessions, obs_per_session=10, sig_per_session=5):
+    """Helper: create multiple sessions with snapshots, signals, executions, and fills."""
+    for i in range(num_sessions):
+        sid = recorder.start_session({"session": i})
+        for j in range(obs_per_session):
+            recorder.record_orderbook_snapshot(
+                event_ticker=f"EVT-{i}",
+                market_ticker=f"MKT-{i}-{j}",
+                yes_bids={55: 10.0},
+                no_bids={45: 8.0},
+            )
+        for j in range(sig_per_session):
+            recorder.record_signal(
+                event_ticker=f"EVT-{i}", strategy="taker", outcome="skip",
+                reject_reason="test", bid_sum=1.0, ask_sum=None,
+                profit_pct=0.0, exposure_ratio=0.0, legs=None, metadata=None,
+            )
+        recorder.record_execution(
+            event_ticker=f"EVT-{i}", strategy="taker",
+            legs=[{"ticker": f"MKT-{i}", "price": 0.55}],
+            result="full_fill", fill_details=None, unwind_cost=0.0,
+        )
+        recorder.record_fill(
+            ticker=f"MKT-{i}", side="yes", action="sell",
+            price=0.55, quantity=1, realized_pnl=0.01,
+        )
+        recorder.record_balance(cash_cents=10000, portfolio_cents=10500)
+        recorder.end_session()
+
+
+def test_purge_skips_when_under_cap(recorder):
+    """purge_old_sessions should no-op when DB is under the size cap."""
+    recorder.start_session({})
+    recorder.record_orderbook_snapshot(
+        event_ticker="EVT-A", market_ticker="MKT-1",
+        yes_bids={55: 10.0}, no_bids={45: 8.0},
+    )
+    recorder.end_session()
+    result = recorder.purge_old_sessions(max_db_size_mb=1000, min_sessions=1)
+    assert result is None
+    rows = recorder._conn.execute("SELECT COUNT(*) FROM orderbook_snapshots").fetchone()[0]
+    assert rows == 1
+
+
+def test_purge_deletes_oldest_session_snapshots_and_signals(tmp_path):
+    """purge should delete snapshots and signals from oldest session first."""
+    db_path = str(tmp_path / "test.db")
+    rec = DataRecorder(db_path)
+    _populate_sessions(rec, num_sessions=3, obs_per_session=10, sig_per_session=5)
+
+    result = rec.purge_old_sessions(max_db_size_mb=0, min_sessions=1)
+    assert result is not None
+    assert len(result["sessions_purged"]) == 2
+
+    obs = rec._conn.execute("SELECT COUNT(*) FROM orderbook_snapshots").fetchone()[0]
+    sig = rec._conn.execute("SELECT COUNT(*) FROM signal_evaluations").fetchone()[0]
+    assert obs == 10
+    assert sig == 5
+
+    execs = rec._conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0]
+    fills = rec._conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0]
+    bals = rec._conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0]
+    assert execs == 3
+    assert fills == 3
+    assert bals == 3
+
+    rec.close()
+
+
+def test_purge_respects_min_sessions(tmp_path):
+    """purge should never delete below min_sessions even if over cap."""
+    db_path = str(tmp_path / "test.db")
+    rec = DataRecorder(db_path)
+    _populate_sessions(rec, num_sessions=3, obs_per_session=10, sig_per_session=5)
+
+    result = rec.purge_old_sessions(max_db_size_mb=0, min_sessions=2)
+    assert result is not None
+    assert len(result["sessions_purged"]) == 1
+
+    sessions_with_obs = rec._conn.execute(
+        "SELECT DISTINCT session_id FROM orderbook_snapshots"
+    ).fetchall()
+    assert len(sessions_with_obs) == 2
+
+    rec.close()
+
+
+def test_purge_sessions_rows_preserved(tmp_path):
+    """Session table rows should never be deleted (referential integrity with trade data)."""
+    db_path = str(tmp_path / "test.db")
+    rec = DataRecorder(db_path)
+    _populate_sessions(rec, num_sessions=3, obs_per_session=5, sig_per_session=3)
+
+    rec.purge_old_sessions(max_db_size_mb=0, min_sessions=1)
+
+    sessions = rec._conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    assert sessions == 3
+
+    rec.close()
