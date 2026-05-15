@@ -121,6 +121,13 @@ Look for `Starting Kalshi Arb Bot in LIVE mode`. If you see `Another instance is
 
 Use the Monitor tool on `/tmp/live_test.log` for the test duration (default 90 seconds).
 
+**IMPORTANT: Exclude `stale orderbook` from the Monitor grep filter.** During startup, the bot registers thousands of events before WebSocket snapshots arrive, producing a flood of stale orderbook warnings (age=inf) that overwhelms the monitor. These are expected, harmless (the staleness guard is working correctly by skipping signal evaluation), and NOT errors. Only check for stale orderbook issues in the post-test log analysis (Step 5) if needed.
+
+Recommended Monitor filter:
+```bash
+tail -f /tmp/live_test.log | grep -E --line-buffered "STATUS \||arb_detected|buy_side_arb|near_expiry|monotone_arb|PARTIAL_FILL|UNWIND|circuit_breaker=triggered|ERROR|Exception|Traceback|timed out|WebSocket disconnected|shutdown|SIGTERM|FATAL|CRITICAL"
+```
+
 **While monitoring, actively track intervention state:**
 - `cumulative_loss = 0.0` — updated on every execution/unwind result
 - `consecutive_errors = 0` — reset on any non-error log line
@@ -148,7 +155,7 @@ Key log patterns to watch for:
 | `near-miss` | Profitable but filtered — useful for tuning | No |
 | `maker horizon-filtered` | Maker arb rejected by horizon limit | No |
 | `WebSocket` | Disconnects or reconnects | No (unless repeated >3x in 60s) |
-| `stale orderbook` | Orderbook data >5s old for a market — signal evaluation skipped | No |
+| `stale orderbook` | Orderbook data >5s old for a market — signal evaluation skipped. **Exclude from Monitor filter** — floods during startup with thousands of age=inf warnings. Check in post-test analysis only. | No |
 | `timed out` | An API call exceeded its timeout — check connectivity | Increment consecutive_errors |
 
 ### Step 4: Stop the bot
