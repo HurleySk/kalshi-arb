@@ -99,10 +99,18 @@ Individual overrides in `config.yaml` take precedence over preset values.
 
 ### Partial Fill Protection
 
+**Buy-side immediate cancel:** When a buy-side arb's batch response has any leg "resting" (no fill), all resting legs are cancelled immediately and filled legs are unwound — no waiting for `fill_timeout_secs`.
+
 On partial fill (some legs fill, others don't), the executor:
 1. Blacklists the event permanently (no re-execution)
-2. Runs tiered auto-unwind on filled legs: Phase 1 (tight limit) → Phase 2 (wider limit) → Phase 3 (market order at $0.99)
+2. Runs 5-phase graduated unwind on filled legs:
+   - Phase 1: fill_price ± 1×step (immediate)
+   - Phase 2: fill_price ± 2×step (after `unwind_phase1_secs`)
+   - Phase 3: fill_price ± 4×step (after `unwind_phase2_secs - phase1`)
+   - Phase 4: 50% toward floor/ceiling, monotonically bounded (after `unwind_phase2_secs`)
+   - Phase 5: absolute floor $0.01 / ceiling $0.99 (after `unwind_phase2_secs`)
 3. Phase timings are configurable per risk mode via `unwind_phase1_secs`, `unwind_phase2_secs`, `unwind_price_step_cents`
+4. Emergency shutdown (`_emergency_shutdown`) retries 3× with exponential backoff; cancel and close operations are independent so a 429 on cancels doesn't block position closes
 
 ### MCP Server (`src/mcp_server.py`)
 
