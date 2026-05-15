@@ -73,6 +73,16 @@ class Dispatcher:
         if self.executor.is_circuit_breaker_tripped():
             return None
 
+        event_markets = self.orderbook_mgr.get_event_markets(event_ticker)
+        for mt in event_markets:
+            age = self.orderbook_mgr.market_age(mt)
+            if age > 5.0:
+                logger.warning(
+                    "stale orderbook for %s: %s age=%.1fs — skipping signal evaluation",
+                    event_ticker, mt, age,
+                )
+                return None
+
         if event_ticker in self._pending_execution:
             return None
 

@@ -108,6 +108,7 @@ def test_near_expiry_signal_suppressed_when_market_already_expired():
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock()}
     ob_mgr.get_event_markets.return_value = ["M1"]
+    ob_mgr.market_age.return_value = 0.0
 
     already_closed = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     market_metadata = {"M1": {"close_time": already_closed}}
@@ -142,6 +143,7 @@ def test_near_expiry_cooldown_prevents_second_signal():
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock()}
     ob_mgr.get_event_markets.return_value = ["M1"]
+    ob_mgr.market_age.return_value = 0.0
 
     close_soon = (datetime.now(timezone.utc) + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
     market_metadata = {"M1": {"close_time": close_soon}}
@@ -178,6 +180,7 @@ def test_dispatcher_routes_near_expiry_signal():
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock()}
     ob_mgr.get_event_markets.return_value = ["M1"]
+    ob_mgr.market_age.return_value = 0.0
 
     close_soon = (datetime.now(timezone.utc) + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
     market_metadata = {"M1": {"close_time": close_soon}}
@@ -210,6 +213,7 @@ def test_dispatcher_routes_buy_side_signal():
     ob_mgr = MagicMock()
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock()}
+    ob_mgr.market_age.return_value = 0.0
 
     dispatcher = Dispatcher(engine=engine, executor=executor, maker=None,
                             orderbook_mgr=ob_mgr, market_metadata={})
@@ -234,6 +238,7 @@ def test_dispatcher_uses_api_total_over_registered_count():
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {"M1": MagicMock(), "M2": MagicMock()}
     ob_mgr.get_registered_market_count.return_value = 2
+    ob_mgr.market_age.return_value = 0.0
 
     # API says 5 total markets; only 2 are active/registered
     dispatcher = Dispatcher(engine=engine, executor=executor, maker=None,
@@ -273,6 +278,7 @@ def test_dispatcher_routes_monotone_signal():
     ob_mgr.get_event_for_market.return_value = "E_upper"
     ob_mgr.get_event_orderbooks.return_value = {"M_upper": upper_book}
     ob_mgr.get_orderbook.side_effect = lambda t: upper_book if t == "M_upper" else lower_book
+    ob_mgr.market_age.return_value = 0.0
 
     registry = MonotoneFamilyRegistry()
     registry.try_register("E_upper", "M_upper", "Will S&P close above 5,100?")
@@ -304,6 +310,7 @@ def test_dispatcher_monotone_skips_below_direction():
     ob_mgr.get_event_for_market.return_value = "E1"
     ob_mgr.get_event_orderbooks.return_value = {}
     ob_mgr.get_orderbook.return_value = Orderbook(yes_bids={65: 100}, no_bids={55: 100})
+    ob_mgr.market_age.return_value = 0.0
 
     registry = MonotoneFamilyRegistry()
     registry.try_register("E1", "M1", "Will S&P close below 5,000?")

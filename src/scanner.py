@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 import logging
+import time
 from typing import Callable
 
 import websockets
@@ -17,6 +18,7 @@ class OrderbookManager:
         self._books: dict[str, Orderbook] = {}
         self._event_markets: dict[str, list[str]] = {}
         self._market_to_event: dict[str, str] = {}
+        self._last_update_ts: dict[str, float] = {}
 
     def register_event(self, event_ticker: str, market_tickers: list[str]):
         self._event_markets[event_ticker] = market_tickers
@@ -42,6 +44,7 @@ class OrderbookManager:
             for p, q in snapshot.get("no_dollars_fp", [])
         }
         self._books[ticker] = Orderbook(yes_bids=yes_bids, no_bids=no_bids)
+        self._last_update_ts[ticker] = time.time()
 
     def apply_delta(self, ticker: str, delta: dict):
         book = self._books.get(ticker)
@@ -58,6 +61,13 @@ class OrderbookManager:
             levels.pop(price_cents, None)
         else:
             levels[price_cents] = new_qty
+        self._last_update_ts[ticker] = time.time()
+
+    def market_age(self, ticker: str) -> float:
+        ts = self._last_update_ts.get(ticker)
+        if ts is None:
+            return float("inf")
+        return time.time() - ts
 
     def get_orderbook(self, ticker: str) -> Orderbook | None:
         return self._books.get(ticker)
