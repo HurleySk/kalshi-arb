@@ -184,3 +184,19 @@ def test_core_monotone_pair_profit():
     gross = 0.60 - 0.40
     fees = fm.taker_fee(0.60) + fm.taker_fee(0.40)
     assert abs(profit - (gross - fees)) < 1e-9
+
+
+def test_core_exposure_ratio_returns_inf_when_unprofitable():
+    from src.core.fees import exposure_ratio
+    fm = MockFeeModel()
+    ratio = exposure_ratio([0.30, 0.30], fm)
+    assert ratio == float("inf")
+
+
+def test_core_profit_fee_not_applied_on_loss():
+    from src.core.fees import arb_profit
+    fm = ProfitTaxFeeModel()
+    # 2 legs at 30c = 60c sum, gross = -0.40 (loss). profit_fee should not be applied.
+    profit = arb_profit([0.30, 0.30], fm)
+    assert profit < 0
+    assert abs(profit - (0.60 - 1.0)) < 1e-9
