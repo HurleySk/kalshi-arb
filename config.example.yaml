@@ -1,6 +1,18 @@
+exchange: kalshi              # kalshi (predictit, ibkr planned for future)
+
 mode: demo
 
 credentials:
+  # Nested format (for multi-exchange, future):
+  # kalshi:
+  #   demo:
+  #     api_key_id: "your-demo-key-id"
+  #     private_key_path: "~/.kalshi/demo_private_key.pem"
+  #   live:
+  #     api_key_id: "your-live-key-id"
+  #     private_key_path: "~/.kalshi/live_private_key.pem"
+
+  # Flat format (current, backward compatible):
   demo:
     api_key_id: "your-demo-key-id"
     private_key_path: "~/.kalshi/demo_private_key.pem"
