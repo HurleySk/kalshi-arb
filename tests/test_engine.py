@@ -714,3 +714,133 @@ def test_evaluate_records_near_miss():
     call_kwargs = recorder.record_signal.call_args[1]
     assert call_kwargs["outcome"] == "near_miss"
     assert call_kwargs["strategy"] == "taker"
+
+
+# --- Strategy taker (src/strategies/taker.py) tests ---
+
+
+def test_taker_evaluate_sell_side():
+    from src.core.models import Orderbook as CoreOB
+    from src.core.risk import load_risk_profile
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    from src.strategies.taker import evaluate_sell_side
+    from datetime import datetime, timezone, timedelta
+
+    fm = KalshiFeeModel()
+    rp = load_risk_profile("aggressive", {})
+    close = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    books = {
+        "T-1": CoreOB(bids={55: 10.0}, asks={57: 5.0}),
+        "T-2": CoreOB(bids={55: 10.0}, asks={57: 5.0}),
+    }
+    meta = {
+        "T-1": {"close_time": close, "volume_24h": 100},
+        "T-2": {"close_time": close, "volume_24h": 100},
+    }
+    signal = evaluate_sell_side("E-1", books, meta, fm, rp)
+    assert signal is not None
+    assert signal.signal_type == "taker"
+    assert signal.net_profit > 0
+
+
+def test_taker_evaluate_sell_side_no_arb():
+    from src.core.models import Orderbook as CoreOB
+    from src.core.risk import load_risk_profile
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    from src.strategies.taker import evaluate_sell_side
+
+    fm = KalshiFeeModel()
+    rp = load_risk_profile("conservative", {})
+    books = {
+        "T-1": CoreOB(bids={30: 10.0}, asks={32: 5.0}),
+        "T-2": CoreOB(bids={30: 10.0}, asks={32: 5.0}),
+    }
+    meta = {
+        "T-1": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+        "T-2": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+    }
+    signal = evaluate_sell_side("E-1", books, meta, fm, rp)
+    assert signal is None
+
+
+def test_taker_evaluate_buy_side():
+    from src.core.models import Orderbook as CoreOB
+    from src.core.risk import load_risk_profile
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    from src.strategies.taker import evaluate_buy_side
+
+    fm = KalshiFeeModel()
+    # Disable coverage filter so the test focuses on profit math
+    rp = load_risk_profile("aggressive", {})
+    # 4 markets at 22c ask = 88c total, profit = 1.0 - 0.88 - fees > 0
+    # ask_sum=0.88 > 0.85 (aggressive coverage), max_ask=0.22 > 0.20
+    books = {
+        "T-1": CoreOB(bids={20: 10.0}, asks={22: 5.0}),
+        "T-2": CoreOB(bids={20: 10.0}, asks={22: 5.0}),
+        "T-3": CoreOB(bids={20: 10.0}, asks={22: 5.0}),
+        "T-4": CoreOB(bids={20: 10.0}, asks={22: 5.0}),
+    }
+    meta = {
+        "T-1": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+        "T-2": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+        "T-3": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+        "T-4": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
+    }
+    signal = evaluate_buy_side("E-1", books, meta, fm, rp)
+    assert signal is not None
+    assert signal.signal_type == "buy_side_taker"
+    assert signal.leg_actions == ["buy", "buy", "buy", "buy"]
+
+
+# --- Strategy near_expiry and monotone tests ---
+
+
+def test_near_expiry_evaluate():
+    from src.core.models import Orderbook as CoreOB
+    from src.core.risk import load_risk_profile
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    from src.strategies.near_expiry import evaluate as ne_evaluate
+    from datetime import datetime, timezone, timedelta
+
+    fm = KalshiFeeModel()
+    rp = load_risk_profile("aggressive", {"near_expiry_window_minutes": 120})
+    close = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    # Use 60¢ + 55¢ = 1.15 sum: exposure_ratio ≈ 4.03 < aggressive max_exposure_ratio=5.0
+    books = {
+        "T-1": CoreOB(bids={60: 10.0}, asks={62: 5.0}),
+        "T-2": CoreOB(bids={55: 10.0}, asks={57: 5.0}),
+    }
+    meta = {
+        "T-1": {"close_time": close, "volume_24h": 0},
+        "T-2": {"close_time": close, "volume_24h": 0},
+    }
+    signal = ne_evaluate("E-1", books, meta, fm, rp)
+    assert signal is not None
+    assert signal.signal_type == "near_expiry_taker"
+
+
+def test_monotone_evaluate():
+    from src.core.models import Orderbook as CoreOB
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    from src.strategies.monotone import evaluate as mono_evaluate
+
+    fm = KalshiFeeModel()
+    upper = CoreOB(bids={70: 10.0}, asks={72: 5.0})
+    lower = CoreOB(bids={50: 10.0}, asks={40: 15.0})
+    signal = mono_evaluate("T-UPPER", upper, "T-LOWER", lower, fm)
+    assert signal is not None
+    assert signal.signal_type == "monotone"
+    assert len(signal.legs) == 2
+    assert signal.leg_actions == ["sell", "buy"]
+
+
+def test_monotone_no_profit():
+    from src.core.models import Orderbook as CoreOB
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    from src.strategies.monotone import evaluate as mono_evaluate
+
+    fm = KalshiFeeModel()
+    upper = CoreOB(bids={40: 10.0}, asks={42: 5.0})
+    lower = CoreOB(bids={50: 10.0}, asks={45: 15.0})
+    signal = mono_evaluate("T-UPPER", upper, "T-LOWER", lower, fm)
+    assert signal is None
