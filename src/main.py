@@ -43,6 +43,7 @@ class ArbBot:
             risk_profile=self.risk_profile,
             maker_max_horizon_hours=self.cfg.maker_max_horizon_hours,
             max_contracts_per_arb=self.cfg.max_contracts_per_arb,
+            recorder=self.recorder,
         )
         self.positions = PositionTracker(recorder=self.recorder)
         self.executor = ExecutionManager(
