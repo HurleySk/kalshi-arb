@@ -1,0 +1,1 @@
+- [No stacked tests](feedback_no_stacked_tests.md) — Never launch multiple pytest runs simultaneously
