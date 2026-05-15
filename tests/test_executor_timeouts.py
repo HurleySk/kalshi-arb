@@ -1,7 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from src.executor import ExecutionManager
+from src.executor import ExecutionManager, TimeoutConfig
 from src.models import TradeSignal
 from src.positions import PositionTracker
 from src.risk import load_risk_profile
@@ -36,8 +36,7 @@ def _make_executor(batch_create_side_effect=None, get_balance_side_effect=None):
     return ExecutionManager(
         api=api, positions=positions,
         fill_timeout_secs=0, risk_profile=profile,
-        batch_create_timeout=0.1, batch_cancel_timeout=0.1,
-        balance_timeout=0.1, monitor_poll_secs=0.01,
+        timeouts=TimeoutConfig(batch_create=0.1, batch_cancel=0.1, balance=0.1, monitor_poll=0.01),
     ), api
 
 
@@ -53,7 +52,7 @@ def _signal(leg_actions=None):
 def test_batch_create_timeout_does_not_hang():
     """If batch_create_orders hangs, execute() must not block forever."""
     async def _hang():
-        await asyncio.sleep(999)
+        await asyncio.Event().wait()
 
     executor, api = _make_executor(batch_create_side_effect=_hang)
 
@@ -69,7 +68,7 @@ def test_batch_create_timeout_does_not_hang():
 def test_balance_check_timeout_proceeds():
     """If get_balance hangs, buy-side execute() should proceed anyway."""
     async def _hang():
-        await asyncio.sleep(999)
+        await asyncio.Event().wait()
 
     executor, api = _make_executor(get_balance_side_effect=_hang)
 

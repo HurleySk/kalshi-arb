@@ -1,14 +1,11 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
-from src.executor import ExecutionManager
+from src.executor import ExecutionManager, TimeoutConfig
 from src.models import TradeSignal
 from src.risk import load_risk_profile
 
 
-_FAST_TIMEOUTS = dict(
-    batch_create_timeout=0.1, batch_cancel_timeout=0.1,
-    balance_timeout=0.1, monitor_poll_secs=0.01,
-)
+_FAST_TIMEOUTS = TimeoutConfig(batch_create=0.1, batch_cancel=0.1, balance=0.1, monitor_poll=0.01)
 
 
 def _make_executor(fill_timeout=0):
@@ -32,7 +29,7 @@ def _make_executor(fill_timeout=0):
     api.batch_cancel_orders = AsyncMock(return_value={})
     positions = MagicMock()
     positions.record_fill = MagicMock()
-    return ExecutionManager(api=api, positions=positions, fill_timeout_secs=fill_timeout, **_FAST_TIMEOUTS), api, positions
+    return ExecutionManager(api=api, positions=positions, fill_timeout_secs=fill_timeout, timeouts=_FAST_TIMEOUTS), api, positions
 
 
 def test_executor_accepts_risk_profile_directly():
@@ -128,7 +125,7 @@ def _make_executor_with_profile(mode="conservative", fill_timeout=0):
     return ExecutionManager(
         api=api, positions=positions,
         fill_timeout_secs=fill_timeout, risk_profile=profile,
-        **_FAST_TIMEOUTS,
+        timeouts=_FAST_TIMEOUTS,
     ), api, positions
 
 

@@ -105,7 +105,9 @@ class ArbBot:
         }
         self._shutdown_timeout: float = 60
         self._shutdown_api_timeout: float = 15
-        self._shutdown_retry_base: float = 2
+        self._shutdown_retry_delay: float = 2
+        self._shutdown_retry_backoff: float = 1.5
+        self._recent_trades_retry_timeout: float = 5
 
     def _setup_logging(self):
         log_dir = Path(self.cfg.log_file).parent
@@ -190,7 +192,7 @@ class ArbBot:
                 logger.warning("Recent trades check timed out for %s — retrying once", ticker)
                 try:
                     resp = await asyncio.wait_for(
-                        self.api.get_market_trades(ticker), timeout=5)
+                        self.api.get_market_trades(ticker), timeout=self._recent_trades_retry_timeout)
                     if not resp.get("trades"):
                         logger.info("No recent trades for %s on retry, skipping arb", ticker)
                         return False
@@ -331,7 +333,7 @@ class ArbBot:
                         max_retries,
                     )
                 else:
-                    wait = self._shutdown_retry_base ** attempt + 1
+                    wait = self._shutdown_retry_delay * (self._shutdown_retry_backoff ** attempt)
                     logger.warning(
                         "Emergency shutdown attempt %d failed, retrying in %ds",
                         attempt + 1, wait,

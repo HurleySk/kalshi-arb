@@ -6,7 +6,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from src.engine import ArbEngine
-from src.executor import ExecutionManager
+from src.executor import ExecutionManager, TimeoutConfig
 from src.models import Orderbook, TradeSignal
 from src.positions import PositionTracker
 from src.risk import load_risk_profile
@@ -47,8 +47,7 @@ def _partial_fill_executor(fill_timeout=0, mode="conservative"):
     return ExecutionManager(
         api=api, positions=positions,
         fill_timeout_secs=fill_timeout, risk_profile=profile,
-        batch_create_timeout=0.1, batch_cancel_timeout=0.1,
-        balance_timeout=0.1, monitor_poll_secs=0.01,
+        timeouts=TimeoutConfig(batch_create=0.1, batch_cancel=0.1, balance=0.1, monitor_poll=0.01),
     ), api, positions
 
 

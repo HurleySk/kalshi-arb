@@ -133,9 +133,10 @@ def test_pending_execution_prevents_duplicate():
 
 def _fast_shutdown_bot(bot):
     """Set small timeouts so shutdown tests don't wait real seconds."""
-    bot._shutdown_timeout = 3
+    bot._shutdown_timeout = 0.5
     bot._shutdown_api_timeout = 0.05
-    bot._shutdown_retry_base = 1.01
+    bot._shutdown_retry_delay = 0.01
+    bot._shutdown_retry_backoff = 1.01
 
 
 def test_emergency_shutdown_retries_on_rate_limit():
