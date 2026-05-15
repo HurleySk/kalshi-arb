@@ -390,6 +390,11 @@ class ArbBot:
         self.recorder.start_session({
             "mode": self.cfg.mode,
             "risk_mode": self.cfg.risk_mode,
+            "max_contracts_per_arb": self.cfg.max_contracts_per_arb,
+            "maker_enabled": self.cfg.maker_enabled,
+            "circuit_breaker_on_any_loss": self.cfg.circuit_breaker_on_any_loss,
+            "max_session_loss": self.cfg.max_session_loss,
+            "strategy_overrides": self.cfg.strategy_overrides,
         })
         logger.info("Starting Kalshi Arb Bot in %s mode (risk: %s)",
                      self.cfg.mode.upper(), self.cfg.risk_mode)

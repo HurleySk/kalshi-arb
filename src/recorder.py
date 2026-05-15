@@ -13,6 +13,7 @@ session is active.  Writes are committed after each insert for durability.
 import json
 import sqlite3
 import time
+from pathlib import Path
 from typing import Any
 
 
@@ -118,6 +119,7 @@ class DataRecorder:
         self._conn: sqlite3.Connection | None = None
 
         if self._enabled:
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(db_path, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
@@ -185,7 +187,7 @@ class DataRecorder:
         ask_sum: float | None,
         profit_pct: float | None,
         exposure_ratio: float | None,
-        legs: list[dict[str, Any]],
+        legs: list[dict[str, Any]] | None,
         metadata: dict[str, Any] | None,
     ) -> None:
         if not self._enabled or self._session_id is None:
@@ -209,7 +211,7 @@ class DataRecorder:
                 ask_sum,
                 profit_pct,
                 exposure_ratio,
-                json.dumps(legs),
+                json.dumps(legs) if legs is not None else None,
                 json.dumps(metadata) if metadata is not None else None,
             ),
         )
@@ -255,7 +257,7 @@ class DataRecorder:
         side: str,
         action: str,
         price: float,
-        quantity: int,
+        quantity: float,
         realized_pnl: float | None,
     ) -> None:
         if not self._enabled or self._session_id is None:

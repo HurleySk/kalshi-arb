@@ -81,6 +81,9 @@ class Dispatcher:
 
         signal = self.engine.evaluate(event_ticker, event_books, market_metadata=self.market_metadata)
 
+        if signal and self.executor.is_executing():
+            self._record_reject(event_ticker, "taker", "executing")
+
         if signal and not self.executor.is_executing():
             if self.executor.is_event_blacklisted(event_ticker):
                 self._record_reject(event_ticker, "taker", "blacklisted")
