@@ -27,6 +27,10 @@ def _make_bot():
         cfg.max_contracts_per_arb = 1
         cfg.log_level = "INFO"
         cfg.log_file = "/dev/null"
+        cfg.recording_enabled = False
+        cfg.recording_db_path = None
+        cfg.recording_snapshot_interval_secs = 5
+        cfg.recording_balance_poll_interval_secs = 300
         mock_cfg.return_value = cfg
 
         with patch("src.main.KalshiAuth"):

@@ -23,10 +23,12 @@ class ArbExecution:
 class ExecutionManager:
     def __init__(self, api: KalshiAPI, positions: PositionTracker,
                  fill_timeout_secs: int, risk_profile: RiskProfile | None = None,
-                 max_session_loss: float = 1.0, circuit_breaker_on_any_loss: bool = True):
+                 max_session_loss: float = 1.0, circuit_breaker_on_any_loss: bool = True,
+                 recorder=None):
         self.api = api
         self.positions = positions
         self.fill_timeout_secs = fill_timeout_secs
+        self.recorder = recorder
         self._executing = False
         self._active: ArbExecution | None = None
         self._failed_events: set[str] = set()
@@ -115,6 +117,29 @@ class ExecutionManager:
                     )
 
             await self._monitor_fills(execution)
+
+            if self.recorder:
+                filled_count = len(execution.filled)
+                total_count = len(execution.order_ids)
+                if filled_count == total_count:
+                    result = "full_fill"
+                elif filled_count > 0:
+                    result = "partial_fill"
+                else:
+                    result = "failed"
+                self.recorder.record_execution(
+                    event_ticker=signal.event_ticker,
+                    strategy=signal.signal_type,
+                    legs=[{
+                        "ticker": t,
+                        "action": (signal.leg_actions[i] if signal.leg_actions else "sell"),
+                        "price": p,
+                        "quantity": quantity,
+                    } for i, (t, p) in enumerate(signal.legs)],
+                    result=result,
+                    fill_details={oid: price for oid, price in execution.filled.items()},
+                    unwind_cost=0.0,
+                )
         except Exception:
             logger.exception("Failed to execute arb on %s", signal.event_ticker)
         finally:

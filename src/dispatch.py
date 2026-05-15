@@ -24,6 +24,7 @@ class Dispatcher:
         near_expiry_window_minutes: int = 0,
         monotone_registry=None,
         event_total_markets: dict[str, int] | None = None,
+        recorder=None,
     ):
         self.engine = engine
         self.executor = executor
@@ -39,6 +40,29 @@ class Dispatcher:
         self._pending_execution: set[str] = set()
         self._maker_dirty_events: set[str] = set()
         self._market_expiry_cache: dict[str, datetime] = {}
+        self.recorder = recorder
+
+    def _record_fire(self, signal: TradeSignal, strategy: str):
+        if not self.recorder:
+            return
+        bid_sum = sum(p for _, p in signal.legs) if signal.signal_type != "buy_side_taker" else None
+        ask_sum = sum(p for _, p in signal.legs) if signal.signal_type == "buy_side_taker" else None
+        self.recorder.record_signal(
+            event_ticker=signal.event_ticker, strategy=strategy, outcome="fire",
+            reject_reason=None, bid_sum=bid_sum, ask_sum=ask_sum,
+            profit_pct=signal.profit_pct, exposure_ratio=signal.exposure_ratio,
+            legs=[{"ticker": t, "price": p} for t, p in signal.legs],
+            metadata={"signal_type": signal.signal_type, "quantity": signal.quantity},
+        )
+
+    def _record_reject(self, event_ticker: str, strategy: str, reason: str):
+        if not self.recorder:
+            return
+        self.recorder.record_signal(
+            event_ticker=event_ticker, strategy=strategy, outcome="reject",
+            reject_reason=reason, bid_sum=None, ask_sum=None,
+            profit_pct=None, exposure_ratio=None, legs=None, metadata=None,
+        )
 
     def process_orderbook_update(self, market_ticker: str) -> TradeSignal | None:
         """Evaluate one orderbook update. Returns a TradeSignal to execute, or None."""
@@ -59,9 +83,11 @@ class Dispatcher:
 
         if signal and not self.executor.is_executing():
             if self.executor.is_event_blacklisted(event_ticker):
+                self._record_reject(event_ticker, "taker", "blacklisted")
                 return None
             last = self._last_signal_time.get(event_ticker, 0)
             if now - last < self._signal_cooldown:
+                self._record_reject(event_ticker, "taker", "cooldown")
                 return None
             self._last_signal_time[event_ticker] = now
             self._pending_execution.add(event_ticker)
@@ -75,6 +101,7 @@ class Dispatcher:
                     "exposure_ratio": round(signal.exposure_ratio, 2),
                 })
             )
+            self._record_fire(signal, "taker")
             return signal
 
         if not signal and self._enable_buy_side_arb:
@@ -101,6 +128,7 @@ class Dispatcher:
                                 "profit_pct": round(buy_signal.profit_pct, 2),
                             })
                         )
+                        self._record_fire(buy_signal, "buy_side")
                         return buy_signal
 
         if not signal and self._is_near_expiry(event_ticker):
@@ -120,6 +148,7 @@ class Dispatcher:
                             "net_profit": round(ne_signal.net_profit, 6),
                             "profit_pct": round(ne_signal.profit_pct, 2),
                         }))
+                        self._record_fire(ne_signal, "near_expiry")
                         return ne_signal
 
         if not signal and self._monotone_registry and not self.executor.is_executing():
@@ -152,6 +181,7 @@ class Dispatcher:
                                 "pair": mono_signal.event_ticker,
                                 "net_profit": round(mono_signal.net_profit, 6),
                             }))
+                            self._record_fire(mono_signal, "monotone")
                             return mono_signal
 
         if self.maker and not signal:

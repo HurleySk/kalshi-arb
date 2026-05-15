@@ -14,14 +14,16 @@ class TrackedPosition:
 
 
 class PositionTracker:
-    def __init__(self):
+    def __init__(self, recorder=None):
         self._positions: dict[str, TrackedPosition] = {}
         self.realized_pnl: float = 0.0
+        self.recorder = recorder
 
     def record_fill(self, ticker: str, side: str, price: float, quantity: float, action: str):
         if quantity <= 0:
             return
 
+        realized_this_fill = None
         pos = self._positions.get(ticker)
 
         if pos is None:
@@ -30,9 +32,7 @@ class PositionTracker:
                 ticker=ticker, side=side, quantity=quantity, avg_price=price, opened_by=action
             )
             logger.info("Fill: %s %dx %s @ %.4f (open)", action, quantity, ticker, price)
-            return
-
-        if pos.opened_by == action:
+        elif pos.opened_by == action:
             # Same direction as original fill — average into the position
             total_cost = pos.avg_price * pos.quantity + price * quantity
             pos.quantity += quantity
@@ -46,10 +46,18 @@ class PositionTracker:
             else:
                 pnl = (price - pos.avg_price) * closed_qty   # bought low, selling high
             self.realized_pnl += pnl
+            realized_this_fill = pnl
             pos.quantity -= closed_qty
             if pos.quantity <= 0:
                 del self._positions[ticker]
             logger.info("Close: %s %dx %s @ %.4f (realized: $%.4f)", action, quantity, ticker, price, pnl)
+
+        if self.recorder:
+            self.recorder.record_fill(
+                ticker=ticker, side=side, action=action,
+                price=price, quantity=quantity,
+                realized_pnl=realized_this_fill,
+            )
 
     def load_position(self, ticker: str, side: str, quantity: float) -> None:
         """Load a long position fetched from the exchange on startup.
