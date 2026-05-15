@@ -97,6 +97,7 @@ def _make_executor_with_profile(mode="conservative", fill_timeout=0):
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
         "unwind_price_step_cents": 3,
+        "sequential_execution": False,
     })
     api = MagicMock()
     api.unwrap_order = lambda raw: raw.get("order", raw)
@@ -182,6 +183,7 @@ def test_buy_side_resting_leg_immediate_cancel():
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
         "unwind_price_step_cents": 3,
+        "sequential_execution": False,
     })
     api = MagicMock()
     api.unwrap_order = lambda raw: raw.get("order", raw)
@@ -337,6 +339,7 @@ def test_unwind_buy_side_graduated_prices():
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
         "unwind_price_step_cents": 3,
+        "sequential_execution": False,
     })
     api = MagicMock()
     api.unwrap_order = lambda raw: raw.get("order", raw)
@@ -407,6 +410,7 @@ def test_buy_side_all_legs_resting_no_blacklist():
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
         "unwind_price_step_cents": 3,
+        "sequential_execution": False,
     })
     api = MagicMock()
     api.unwrap_order = lambda raw: raw.get("order", raw)
@@ -468,3 +472,143 @@ def test_build_orders_mixed_actions():
     orders = executor.build_orders(signal, quantity=1)
     assert api.build_sell_order.call_count == 1
     assert api.build_buy_order.call_count == 1
+
+
+def test_sequential_execution_sends_legs_one_at_a_time():
+    """Sequential mode should send one leg per batch call, highest price first."""
+    profile = load_risk_profile("conservative", {
+        "unwind_phase1_secs": 0,
+        "unwind_phase2_secs": 0,
+        "sequential_execution": True,
+    })
+    api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
+    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+        "ticker": ticker, "action": "sell", "side": "yes",
+        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+    })
+    api.batch_cancel_orders = AsyncMock(return_value={})
+    positions = MagicMock()
+    positions.record_fill = MagicMock()
+
+    api.batch_create_orders = AsyncMock(side_effect=[
+        {"orders": [{"order": {"order_id": "o1", "ticker": "M1", "status": "executed",
+                               "yes_price_dollars": "0.50", "fill_count_fp": "1.00",
+                               "action": "sell", "side": "yes", "initial_count_fp": "1.00"}}]},
+        {"orders": [{"order": {"order_id": "o2", "ticker": "M2", "status": "executed",
+                               "yes_price_dollars": "0.35", "fill_count_fp": "1.00",
+                               "action": "sell", "side": "yes", "initial_count_fp": "1.00"}}]},
+        {"orders": [{"order": {"order_id": "o3", "ticker": "M3", "status": "executed",
+                               "yes_price_dollars": "0.30", "fill_count_fp": "1.00",
+                               "action": "sell", "side": "yes", "initial_count_fp": "1.00"}}]},
+    ])
+
+    executor = ExecutionManager(
+        api=api, positions=positions, fill_timeout_secs=0,
+        risk_profile=profile, timeouts=_FAST_TIMEOUTS,
+    )
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M2", 0.35), ("M1", 0.50), ("M3", 0.30)],
+        net_profit=0.08, profit_pct=8.0, exposure_ratio=1.5,
+    )
+    asyncio.run(executor.execute(signal, quantity=1))
+
+    assert api.batch_create_orders.call_count == 3
+    first_order = api.batch_create_orders.call_args_list[0][0][0]
+    assert len(first_order) == 1
+    assert first_order[0]["ticker"] == "M1"
+    assert first_order[0]["yes_price"] == 50
+    second_order = api.batch_create_orders.call_args_list[1][0][0]
+    assert second_order[0]["ticker"] == "M2"
+    third_order = api.batch_create_orders.call_args_list[2][0][0]
+    assert third_order[0]["ticker"] == "M3"
+
+
+def test_sequential_execution_aborts_on_resting():
+    """If a leg goes resting in sequential mode, cancel it and unwind filled legs."""
+    profile = load_risk_profile("conservative", {
+        "unwind_phase1_secs": 0,
+        "unwind_phase2_secs": 0,
+        "sequential_execution": True,
+    })
+    api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
+    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+        "ticker": ticker, "action": "sell", "side": "yes",
+        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+    })
+    api.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+        "ticker": ticker, "action": "buy", "side": "yes",
+        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+    })
+    api.batch_cancel_orders = AsyncMock(return_value={})
+    api.cancel_order = AsyncMock(return_value={})
+    positions = MagicMock()
+    positions.record_fill = MagicMock()
+
+    api.batch_create_orders = AsyncMock(side_effect=[
+        {"orders": [{"order": {"order_id": "o1", "ticker": "M1", "status": "executed",
+                               "yes_price_dollars": "0.50", "fill_count_fp": "1.00",
+                               "action": "sell", "side": "yes", "initial_count_fp": "1.00"}}]},
+        {"orders": [{"order": {"order_id": "o2", "ticker": "M2", "status": "resting",
+                               "yes_price_dollars": "0.35", "fill_count_fp": "0.00",
+                               "action": "sell", "side": "yes", "initial_count_fp": "1.00"}}]},
+        {"orders": [{"order": {"order_id": "u1", "ticker": "M1", "status": "executed",
+                               "yes_price_dollars": "0.53", "fill_count_fp": "1.00",
+                               "action": "buy", "side": "yes", "initial_count_fp": "1.00"}}]},
+    ])
+
+    executor = ExecutionManager(
+        api=api, positions=positions, fill_timeout_secs=0,
+        risk_profile=profile, timeouts=_FAST_TIMEOUTS,
+    )
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M2", 0.35), ("M1", 0.50), ("M3", 0.30)],
+        net_profit=0.08, profit_pct=8.0, exposure_ratio=1.5,
+    )
+    asyncio.run(executor.execute(signal, quantity=1))
+
+    assert api.batch_create_orders.call_count == 3
+    api.batch_cancel_orders.assert_called_with(["o2"])
+    assert executor.is_event_blacklisted("E1")
+
+
+def test_sequential_execution_zero_exposure_on_first_leg_resting():
+    """If the first (most expensive) leg goes resting, cancel and return — zero exposure."""
+    profile = load_risk_profile("conservative", {
+        "unwind_phase1_secs": 0,
+        "unwind_phase2_secs": 0,
+        "sequential_execution": True,
+    })
+    api = MagicMock()
+    api.unwrap_order = lambda raw: raw.get("order", raw)
+    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+        "ticker": ticker, "action": "sell", "side": "yes",
+        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+    })
+    api.batch_cancel_orders = AsyncMock(return_value={})
+    positions = MagicMock()
+
+    api.batch_create_orders = AsyncMock(return_value={
+        "orders": [{"order": {"order_id": "o1", "ticker": "M1", "status": "resting",
+                               "yes_price_dollars": "0.50", "fill_count_fp": "0.00",
+                               "action": "sell", "side": "yes", "initial_count_fp": "1.00"}}]
+    })
+
+    executor = ExecutionManager(
+        api=api, positions=positions, fill_timeout_secs=0,
+        risk_profile=profile, timeouts=_FAST_TIMEOUTS,
+    )
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M2", 0.35), ("M1", 0.50), ("M3", 0.30)],
+        net_profit=0.08, profit_pct=8.0, exposure_ratio=1.5,
+    )
+    asyncio.run(executor.execute(signal, quantity=1))
+
+    assert api.batch_create_orders.call_count == 1
+    api.batch_cancel_orders.assert_called_with(["o1"])
+    assert not executor.is_event_blacklisted("E1")
+    positions.record_fill.assert_not_called()

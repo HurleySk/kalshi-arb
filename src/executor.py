@@ -55,6 +55,7 @@ class ExecutionManager:
         self._unwind_phase1_secs = risk_profile.unwind_phase1_secs if risk_profile else 15
         self._unwind_phase2_secs = risk_profile.unwind_phase2_secs if risk_profile else 30
         self._unwind_price_step_cents = risk_profile.unwind_price_step_cents if risk_profile else 3
+        self._sequential_execution = risk_profile.sequential_execution if risk_profile else False
         self.session_realized_loss = 0.0
         self._circuit_breaker_tripped = False
         self._processed_fill_ids: OrderedDict[str, None] = OrderedDict()
@@ -123,6 +124,10 @@ class ExecutionManager:
                 "Executing arb on %s: %d legs, profit=%.4f (%.2f%%)",
                 signal.event_ticker, len(signal.legs), signal.net_profit, signal.profit_pct,
             )
+
+            if self._sequential_execution and len(orders) > 1:
+                await self._execute_sequential(signal, orders, quantity)
+                return
 
             response = await asyncio.wait_for(self.api.batch_create_orders(orders), timeout=self._timeouts.batch_create)
             logger.info("Batch order response: %s", response)
@@ -288,6 +293,100 @@ class ExecutionManager:
         if oid:
             self._track_fill_id(oid)
         return status == "executed", unwind_price, oid
+
+    async def _execute_sequential(self, signal: TradeSignal, orders: list[dict], quantity: int):
+        """Execute legs one at a time, highest price first. Abort on first resting order."""
+        leg_indices = list(range(len(orders)))
+        leg_indices.sort(key=lambda i: orders[i].get("yes_price", 0), reverse=True)
+
+        filled_legs: list[FilledLeg] = []
+        filled_oids: list[str] = []
+
+        for idx in leg_indices:
+            order = orders[idx]
+            try:
+                resp = await asyncio.wait_for(
+                    self.api.batch_create_orders([order]), timeout=self._timeouts.batch_create)
+            except (asyncio.TimeoutError, Exception):
+                logger.exception("Sequential leg %d timed out for %s — aborting", idx, signal.event_ticker)
+                break
+
+            inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
+            oid = inner.get("order_id", "")
+            status = inner.get("status", "")
+
+            if status == "executed":
+                price = float(inner.get("yes_price_dollars", 0))
+                qty = int(float(inner.get("fill_count_fp", 0)))
+                if oid:
+                    self._track_fill_id(oid)
+                filled_oids.append(oid)
+                original_action = (
+                    signal.leg_actions[idx] if signal.leg_actions and idx < len(signal.leg_actions) else "sell"
+                )
+                filled_legs.append(FilledLeg(
+                    ticker=inner.get("ticker", ""),
+                    fill_price=price,
+                    quantity=qty,
+                    unwind_action="sell" if original_action == "buy" else "buy",
+                ))
+                self.positions.record_fill(
+                    ticker=inner.get("ticker", ""),
+                    side=inner.get("side", "yes"),
+                    price=price,
+                    quantity=qty,
+                    action=inner.get("action", "sell"),
+                )
+                logger.info("Sequential leg %d filled: %s @ %.2f (%d/%d)",
+                            idx, inner.get("ticker", ""), price,
+                            len(filled_legs), len(orders))
+            else:
+                if oid:
+                    try:
+                        await asyncio.wait_for(
+                            self.api.batch_cancel_orders([oid]), timeout=self._timeouts.batch_cancel)
+                    except (asyncio.TimeoutError, Exception):
+                        logger.warning("Failed to cancel resting order %s", oid)
+                logger.warning(
+                    "Sequential leg %d resting for %s (%s @ %s) — aborting after %d/%d legs filled",
+                    idx, signal.event_ticker, inner.get("ticker", ""),
+                    inner.get("yes_price_dollars", "?"),
+                    len(filled_legs), len(orders),
+                )
+                break
+
+        if len(filled_legs) == len(orders):
+            logger.info("Sequential execution complete for %s: all %d legs filled", signal.event_ticker, len(orders))
+            if self.recorder:
+                self.recorder.record_execution(
+                    event_ticker=signal.event_ticker,
+                    strategy=signal.signal_type,
+                    legs=[{"ticker": t, "action": (signal.leg_actions[i] if signal.leg_actions else "sell"),
+                           "price": p, "quantity": quantity} for i, (t, p) in enumerate(signal.legs)],
+                    result="full_fill",
+                    fill_details={oid: fl.fill_price for oid, fl in zip(filled_oids, filled_legs)},
+                    unwind_cost=0.0,
+                )
+            return
+
+        if filled_legs:
+            logger.error(
+                "PARTIAL FILL (sequential) on %s: %d/%d legs filled — unwinding",
+                signal.event_ticker, len(filled_legs), len(orders),
+            )
+            self._failed_events.add(signal.event_ticker)
+            execution = ArbExecution(signal=signal, order_ids=filled_oids, filled_legs=filled_legs)
+            if self.recorder:
+                self.recorder.record_execution(
+                    event_ticker=signal.event_ticker,
+                    strategy=signal.signal_type,
+                    legs=[{"ticker": t, "action": (signal.leg_actions[i] if signal.leg_actions else "sell"),
+                           "price": p, "quantity": quantity} for i, (t, p) in enumerate(signal.legs)],
+                    result="partial_fill",
+                    fill_details={oid: fl.fill_price for oid, fl in zip(filled_oids, filled_legs)},
+                    unwind_cost=0.0,
+                )
+            self._launch_unwind(execution)
 
     def _launch_unwind(self, execution: ArbExecution):
         """Launch unwind as a detached task so the executor is free for new signals."""

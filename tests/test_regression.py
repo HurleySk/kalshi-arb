@@ -20,6 +20,7 @@ def _partial_fill_executor(fill_timeout=0, mode="conservative"):
     profile = load_risk_profile(mode, {
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
+        "sequential_execution": False,
     })
     api = MagicMock()
     api.unwrap_order = lambda raw: raw.get("order", raw)
