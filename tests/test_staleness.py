@@ -36,6 +36,30 @@ def test_apply_delta_updates_timestamp():
     assert age_after_delta < age_before_delta, "Delta should refresh the timestamp"
 
 
+def test_dispatcher_skips_at_3s_stale():
+    """3s-old data should be rejected with the tightened 2s threshold."""
+    from src.dispatch import Dispatcher
+    from src.executor import ExecutionManager
+
+    mgr = OrderbookManager()
+    mgr.register_event("E1", ["M1", "M2"])
+    mgr.apply_snapshot("M1", {"yes_dollars_fp": [["0.55", "10"]], "no_dollars_fp": [["0.45", "10"]]})
+    mgr.apply_snapshot("M2", {"yes_dollars_fp": [["0.55", "10"]], "no_dollars_fp": [["0.45", "10"]]})
+    mgr._last_update_ts["M1"] = time.time() - 3.0
+
+    engine = MagicMock()
+    executor = MagicMock(spec=ExecutionManager)
+    executor.is_circuit_breaker_tripped.return_value = False
+
+    dispatcher = Dispatcher(
+        engine=engine, executor=executor,
+        maker=None, orderbook_mgr=mgr, market_metadata={},
+    )
+    result = dispatcher.process_orderbook_update("M1")
+    assert result is None
+    engine.evaluate.assert_not_called()
+
+
 def test_dispatcher_skips_stale_event():
     """Dispatcher must not evaluate signals when orderbook data is stale."""
     from src.dispatch import Dispatcher
