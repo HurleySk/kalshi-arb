@@ -72,7 +72,7 @@ def test_aggressive_preset_has_widest_window():
 def test_conservative_two_sided_fields():
     profile = load_risk_profile("conservative", {})
     assert profile.two_sided_min_spread_cents == 6
-    assert profile.two_sided_max_inventory == 10
+    assert profile.two_sided_max_inventory == 0
     assert profile.two_sided_timeout_secs == 120
     assert profile.two_sided_min_volume_24h == 50.0
 
@@ -80,7 +80,7 @@ def test_conservative_two_sided_fields():
 def test_moderate_two_sided_fields():
     profile = load_risk_profile("moderate", {})
     assert profile.two_sided_min_spread_cents == 4
-    assert profile.two_sided_max_inventory == 25
+    assert profile.two_sided_max_inventory == 0
     assert profile.two_sided_timeout_secs == 180
     assert profile.two_sided_min_volume_24h == 10.0
 
@@ -88,7 +88,7 @@ def test_moderate_two_sided_fields():
 def test_aggressive_two_sided_fields():
     profile = load_risk_profile("aggressive", {})
     assert profile.two_sided_min_spread_cents == 2
-    assert profile.two_sided_max_inventory == 50
+    assert profile.two_sided_max_inventory == 0
 
 
 def test_min_buy_side_coverage_preset_values():
@@ -127,3 +127,15 @@ def test_bool_override_with_native_bool():
 def test_bool_override_unknown_key_ignored():
     profile = load_risk_profile("conservative", {"nonexistent_key": True})
     assert profile.min_volume_24h == 50.0
+
+
+def test_all_presets_disable_buy_side_arb():
+    for mode in ("conservative", "moderate", "aggressive"):
+        profile = load_risk_profile(mode, {})
+        assert profile.enable_buy_side_arb is False, f"{mode} should disable buy_side_arb"
+
+
+def test_all_presets_disable_two_sided():
+    for mode in ("conservative", "moderate", "aggressive"):
+        profile = load_risk_profile(mode, {})
+        assert profile.two_sided_max_inventory == 0, f"{mode} should disable two_sided"
