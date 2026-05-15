@@ -177,7 +177,6 @@ strategy:
 """)
     cfg = load_config(str(cfg_file))
     assert cfg.retention_max_db_size_mb == 5000
-    assert cfg.retention_min_sessions == 1
     assert cfg.cleanup_interval_secs == 1800
     assert cfg.log_max_file_size_mb == 5
     assert cfg.log_max_backup_count == 5
@@ -196,7 +195,6 @@ strategy:
   risk_mode: conservative
 recording:
   retention_max_db_size_mb: 2000
-  retention_min_sessions: 3
   cleanup_interval_secs: 900
 logging:
   max_file_size_mb: 10
@@ -204,7 +202,6 @@ logging:
 """)
     cfg = load_config(str(cfg_file))
     assert cfg.retention_max_db_size_mb == 2000
-    assert cfg.retention_min_sessions == 3
     assert cfg.cleanup_interval_secs == 900
     assert cfg.log_max_file_size_mb == 10
     assert cfg.log_max_backup_count == 3

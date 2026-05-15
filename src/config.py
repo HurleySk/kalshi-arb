@@ -40,7 +40,6 @@ class Config:
     recording_snapshot_interval_secs: int
     recording_balance_poll_interval_secs: int
     retention_max_db_size_mb: int
-    retention_min_sessions: int
     cleanup_interval_secs: int
     log_max_file_size_mb: int
     log_max_backup_count: int
@@ -107,7 +106,6 @@ def load_config(path: str) -> Config:
         recording_snapshot_interval_secs=int(recording_cfg.get("snapshot_interval_secs", 5)),
         recording_balance_poll_interval_secs=int(recording_cfg.get("balance_poll_interval_secs", 300)),
         retention_max_db_size_mb=max(0, int(recording_cfg.get("retention_max_db_size_mb", 5000))),
-        retention_min_sessions=max(1, int(recording_cfg.get("retention_min_sessions", 1))),
         cleanup_interval_secs=max(60, int(recording_cfg.get("cleanup_interval_secs", 1800))),
         log_max_file_size_mb=max(1, int(logging_cfg.get("max_file_size_mb", 5))),
         log_max_backup_count=max(1, int(logging_cfg.get("max_backup_count", 5))),

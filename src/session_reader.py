@@ -17,8 +17,6 @@ class SessionReader:
                 ts = float(name.replace("session_", ""))
             except ValueError:
                 continue
-            if start is not None and ts < start:
-                continue
             if end is not None and ts > end:
                 continue
             result.append(Path(p))

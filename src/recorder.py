@@ -129,7 +129,6 @@ class DataRecorder:
         self,
         db_path: str | None = None,
         max_db_size_mb: int = 5000,
-        min_sessions: int = 1,
         session_dir: str | None = None,
     ) -> None:
         self._session_dir = session_dir

@@ -49,6 +49,11 @@ class Analytics:
     def _query_one(self, sql: str, params: list | None = None) -> sqlite3.Row | None:
         if not self._has_tables:
             return None
+        if self._session_dir:
+            from src.session_reader import SessionReader
+            rows = SessionReader(self._session_dir).query_across(sql, tuple(params or []))
+            return rows[0] if rows else None
+        assert self._conn is not None
         return self._conn.execute(sql, params or []).fetchone()
 
     # ------------------------------------------------------------------
@@ -397,7 +402,8 @@ class Analytics:
 
     def close(self) -> None:
         """Close the database connection."""
-        self._conn.close()
+        if self._conn is not None:
+            self._conn.close()
 
 
 # ---------------------------------------------------------------------------

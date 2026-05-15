@@ -265,7 +265,8 @@ class ReplayEngine:
 
     def close(self) -> None:
         """Close the SQLite connection."""
-        self._conn.close()
+        if self._conn is not None:
+            self._conn.close()
 
 
 # ---------------------------------------------------------------------------
