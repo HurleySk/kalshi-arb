@@ -233,3 +233,62 @@ def test_listen_with_async_callback():
 
     asyncio.run(scanner.listen())
     assert "M1" in received_tickers
+
+
+# --- Core OrderbookManager (src/core/orderbook_manager.py) tests ---
+
+
+def test_core_orderbook_manager_snapshot():
+    from src.core.orderbook_manager import OrderbookManager as CoreOBM
+    mgr = CoreOBM()
+    mgr.register_event("E-1", ["T-1"])
+    mgr.apply_snapshot("T-1", {
+        "bids": {55: 10.0, 50: 20.0},
+        "asks": {57: 5.0, 60: 15.0},
+    })
+    book = mgr.get_orderbook("T-1")
+    assert book is not None
+    assert book.best_bid() == 0.55
+    assert book.best_ask() == 0.57
+
+
+def test_core_orderbook_manager_delta():
+    from src.core.orderbook_manager import OrderbookManager as CoreOBM
+    mgr = CoreOBM()
+    mgr.register_event("E-1", ["T-1"])
+    mgr.apply_snapshot("T-1", {"bids": {55: 10.0}, "asks": {57: 5.0}})
+    mgr.apply_delta("T-1", {"price_cents": 55, "delta_qty": -3.0, "side": "bid"})
+    book = mgr.get_orderbook("T-1")
+    assert book.bids[55] == 7.0
+
+
+def test_core_orderbook_manager_delta_removes_zero():
+    from src.core.orderbook_manager import OrderbookManager as CoreOBM
+    mgr = CoreOBM()
+    mgr.register_event("E-1", ["T-1"])
+    mgr.apply_snapshot("T-1", {"bids": {55: 10.0}, "asks": {}})
+    mgr.apply_delta("T-1", {"price_cents": 55, "delta_qty": -10.0, "side": "bid"})
+    book = mgr.get_orderbook("T-1")
+    assert 55 not in book.bids
+
+
+def test_core_orderbook_manager_unregister():
+    from src.core.orderbook_manager import OrderbookManager as CoreOBM
+    mgr = CoreOBM()
+    mgr.register_event("E-1", ["T-1", "T-2"])
+    mgr.apply_snapshot("T-1", {"bids": {55: 10.0}, "asks": {}})
+    mgr.unregister_event("E-1")
+    assert mgr.get_orderbook("T-1") is None
+    assert mgr.get_event_for_market("T-1") is None
+
+
+def test_core_orderbook_manager_event_orderbooks():
+    from src.core.orderbook_manager import OrderbookManager as CoreOBM
+    mgr = CoreOBM()
+    mgr.register_event("E-1", ["T-1", "T-2"])
+    mgr.apply_snapshot("T-1", {"bids": {55: 10.0}, "asks": {57: 5.0}})
+    mgr.apply_snapshot("T-2", {"bids": {40: 20.0}, "asks": {42: 8.0}})
+    books = mgr.get_event_orderbooks("E-1")
+    assert len(books) == 2
+    assert books["T-1"].best_bid() == 0.55
+    assert books["T-2"].best_bid() == 0.40
