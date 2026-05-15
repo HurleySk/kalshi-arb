@@ -89,6 +89,7 @@ Individual overrides in `config.yaml` take precedence over preset values.
 - `two_sided_min_spread_cents` — minimum spread required to post (need spread ≥ this + 2 to post 1¢ inside each side)
 - `two_sided_timeout_secs` — cancel unfilled pairs after this many seconds
 - `two_sided_min_volume_24h` — volume floor for two-sided candidates
+- `maker_min_volume_24h` — separate volume floor for maker strategy (lower than taker since makers create liquidity; conservative=10, moderate/aggressive=0)
 
 ### Key filtering pipeline in `ArbEngine.evaluate()`
 
