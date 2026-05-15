@@ -39,7 +39,7 @@ Five async components run concurrently in `ArbBot.run()` (`src/main.py`):
 
 5. **Maker Layer** (`engine.evaluate_maker` → `maker.MakerManager`) — When bid sum is between $1.00 and the taker threshold (~$1.07), posts limit orders at best bid prices as maker (0% fees). On fill, completes the arb via cancel_and_take (cancel remaining, taker-complete) or tighten_on_fill (progressively tighten prices). Reprices on orderbook updates, cancels if arb disappears.
 
-6. **Two-Sided Market Making** (`engine.evaluate_two_sided` → `two_sided.TwoSidedManager`) — Per-market spread capture. When spread ≥ `two_sided_min_spread_cents + 2`, posts limit bid and ask each 1¢ inside NBBO. On fill, cancels the opposite side and unwinds. Times out unfilled pairs after `two_sided_timeout_secs`.
+6. **Two-Sided Market Making** (`engine.evaluate_two_sided` → `two_sided.TwoSidedManager`) — Per-market spread capture. **Disabled by default** (`two_sided_max_inventory: 0`). When enabled and spread ≥ `two_sided_min_spread_cents + 2`, posts limit bid and ask each 1¢ inside NBBO. On fill, cancels the opposite side and unwinds. Times out unfilled pairs after `two_sided_timeout_secs`.
 
 ### Key modules
 
@@ -75,14 +75,14 @@ WS fill → TwoSidedManager.handle_fill OR Dispatcher.route_fill → executor.ha
 
 Three configurable risk profiles control all trading thresholds. Set `risk_mode` in `config.yaml`:
 
-- **conservative** (default) — min_volume_24h=50, min_bid_depth=5, min_profit_pct=2.0%, require_recent_trades=true, max_exposure_ratio=2.0; near_expiry_window=30min; two_sided_max_inventory=10, spread≥6¢
-- **moderate** — min_volume_24h=10, min_bid_depth=2, min_profit_pct=1.0%, require_recent_trades=true, max_exposure_ratio=3.0; near_expiry_window=60min; two_sided_max_inventory=25, spread≥4¢
-- **aggressive** — min_volume_24h=0, min_bid_depth=1, min_profit_pct=0.5%, require_recent_trades=false, max_exposure_ratio=5.0; near_expiry_window=120min; two_sided_max_inventory=50, spread≥2¢
+- **conservative** (default) — min_volume_24h=50, min_bid_depth=5, min_ask_depth=5, min_profit_pct=2.0%, require_recent_trades=true, max_exposure_ratio=2.0; near_expiry_window=30min; two_sided disabled, buy_side disabled
+- **moderate** — min_volume_24h=10, min_bid_depth=2, min_ask_depth=2, min_profit_pct=1.0%, require_recent_trades=true, max_exposure_ratio=3.0; near_expiry_window=60min; two_sided disabled, buy_side disabled
+- **aggressive** — min_volume_24h=0, min_bid_depth=1, min_ask_depth=1, min_profit_pct=0.5%, require_recent_trades=false, max_exposure_ratio=5.0; near_expiry_window=120min; two_sided disabled, buy_side disabled
 
 Individual overrides in `config.yaml` take precedence over preset values.
 
 **New strategy fields** (all presets have defaults; override in `config.yaml` to customize):
-- `enable_buy_side_arb` — buy all YES outcomes when ask sum < $1 - fees (default: true)
+- `enable_buy_side_arb` — buy all YES outcomes when ask sum < $1 - fees (default: false — disabled due to structural ask-lifting risk)
 - `near_expiry_window_minutes` — window before close to use relaxed taker filters (0 = disabled)
 - `near_expiry_min_profit_pct`, `near_expiry_min_bid_depth`, `near_expiry_min_volume_24h` — near-expiry specific thresholds
 - `two_sided_max_inventory` — max total contracts in resting two-sided pairs (0 = disabled)
@@ -129,9 +129,11 @@ Eight layers of timeout protection prevent hanging API calls from freezing the b
 3. **Emergency shutdown** — 60s overall timeout, 15s per API call inside. Idempotency guard prevents duplicate concurrent invocations.
 4. **Boot reconcile** — 60s timeout. On timeout, proceeds without full reconciliation.
 5. **WebSocket reconnect** — 30s timeout on `connect()` inside `_reconnect()`.
-6. **Orderbook staleness** — `OrderbookManager.market_age()` tracks seconds since last update. Dispatcher skips signal evaluation when any market in the event is >5s stale.
+6. **Orderbook staleness** — `OrderbookManager.market_age()` tracks seconds since last update. Dispatcher skips signal evaluation when any market in the event is >2s stale.
 7. **SIGTERM handler** — `signal.SIGTERM`/`SIGINT` trigger graceful shutdown: cancel tasks, await unwinds, close connections.
 8. **Recent trades** — 10s initial timeout + 5s retry on `get_market_trades()`. On double timeout or retry failure, treats as "no recent trades" (rejects the signal).
+9. **Sequential leg execution** — Legs executed one at a time, highest price first. If any leg goes resting, cancel it immediately and unwind only the already-filled legs. Eliminates the worst partial-fill scenario where multiple expensive legs fill before a cheap leg fails.
+10. **Ask-side depth check** — `_validate_legs` verifies each market has sufficient ask-side depth (`min_ask_depth`). One-sided markets (bids only, no asks) are rejected as likely stale/phantom.
 
 ### MCP Server (`src/mcp_server.py`)
 

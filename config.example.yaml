@@ -20,9 +20,11 @@ strategy:
   maker_max_horizon_hours: 4          # Only post maker orders on events closing within this window
   # maker_min_volume_24h: 10.0        # Volume floor for maker (lower than taker; conservative=10, moderate/aggressive=0)
   max_contracts_per_arb: 1            # Max contracts per arb execution (default: 1)
+  sequential_execution: true          # Execute legs one at a time, highest price first (default: true)
   # Optional overrides (uncomment to customize):
   # min_volume_24h: 50
   # min_bid_depth: 5
+  # min_ask_depth: 5                  # Ask-side depth check (conservative=5, moderate=2, aggressive=1)
   # min_profit_pct: 2.0
   # require_recent_trades: true
   # max_exposure_ratio: 2.0
@@ -32,8 +34,8 @@ strategy:
   # min_open_interest: 0
   # min_liquidity: 0
 
-  # Buy-side structural arb (buy all outcomes when sum(asks) < $1 - fees)
-  # enable_buy_side_arb: true
+  # Buy-side structural arb — DISABLED (structural ask-lifting risk, two live losses from partial fills)
+  # enable_buy_side_arb: false
   # min_buy_side_coverage: 0.90  # reject events where ask_sum < this (applied after hard guards ask_sum<0.60/max_ask<0.20); conservative=0.90, moderate=0.88, aggressive=0.85
 
   # Near-expiry stale order harvesting (relaxed taker within window of close)
@@ -42,8 +44,8 @@ strategy:
   # near_expiry_min_bid_depth: 1
   # near_expiry_min_volume_24h: 0.0
 
-  # Two-sided market making (post bid + ask 1¢ inside NBBO, earn spread)
-  # two_sided_max_inventory: 10        # 0 = disabled; conservative=10, moderate=25, aggressive=50
+  # Two-sided market making — DISABLED (untested in live, re-enable once execution layer is proven)
+  # two_sided_max_inventory: 0         # 0 = disabled
   # two_sided_min_spread_cents: 6      # conservative=6, moderate=4, aggressive=2
   # two_sided_timeout_secs: 120        # cancel unfilled pair after this many seconds
   # two_sided_min_volume_24h: 50.0
