@@ -23,7 +23,7 @@ def test_connect_retries_on_failure():
     fake_ws = MagicMock()
 
     connect_calls = 0
-    async def fake_connect(url, additional_headers):
+    async def fake_connect(url, additional_headers, **kwargs):
         nonlocal connect_calls
         connect_calls += 1
         if connect_calls < 3:
