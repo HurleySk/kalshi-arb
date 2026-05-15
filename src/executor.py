@@ -39,8 +39,8 @@ class TimeoutConfig:
 
 
 class ExecutionManager:
-    def __init__(self, api, order_builder=None, positions: PositionTracker | None = None,
-                 fill_timeout_secs: int = 0, risk_profile: RiskProfile | None = None,
+    def __init__(self, api, order_builder=None, *, positions: PositionTracker,
+                 fill_timeout_secs: int, risk_profile: RiskProfile | None = None,
                  max_session_loss: float = 1.0, circuit_breaker_on_any_loss: bool = True,
                  recorder=None, timeouts: TimeoutConfig | None = None):
         self.api = api
