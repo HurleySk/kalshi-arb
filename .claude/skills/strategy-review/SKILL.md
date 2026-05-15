@@ -47,6 +47,9 @@ to check whether the change improves or degrades performance on out-of-sample da
 - Does the circuit breaker still function?
 - Are partial fill unwind paths still correct?
 - Could this change increase maximum possible loss per trade?
+- Are all API calls in the execution path wrapped in `asyncio.wait_for`?
+- Does the staleness check in dispatch.py prevent trading on stale data?
+- Is `cancel_unwinds()` called during shutdown?
 
 ### 4. Edge Case Analysis
 

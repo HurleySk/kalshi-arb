@@ -120,6 +120,19 @@ On partial fill (some legs fill, others don't), the executor:
 7. Phase timings are configurable per risk mode via `unwind_phase1_secs`, `unwind_phase2_secs`, `unwind_price_step_cents`
 8. Emergency shutdown (`_emergency_shutdown`) retries 3× with exponential backoff; cancel and close operations are independent so a 429 on cancels doesn't block position closes
 
+### Execution Fidelity — Defense in Depth
+
+Eight layers of timeout protection prevent hanging API calls from freezing the bot:
+
+1. **HTTP transport** — `aiohttp.ClientTimeout(total=30, connect=10, sock_read=15)` on the session. No HTTP request can hang >30s.
+2. **Executor API calls** — `asyncio.wait_for` on `batch_create_orders` (15s), `batch_cancel_orders` (10s), `get_balance` (10s) inside `execute()` and `_monitor_fills()`.
+3. **Emergency shutdown** — 60s overall timeout, 15s per API call inside. Idempotency guard prevents duplicate concurrent invocations.
+4. **Boot reconcile** — 60s timeout. On timeout, proceeds without full reconciliation.
+5. **WebSocket reconnect** — 30s timeout on `connect()` inside `_reconnect()`.
+6. **Orderbook staleness** — `OrderbookManager.market_age()` tracks seconds since last update. Dispatcher skips signal evaluation when any market in the event is >5s stale.
+7. **SIGTERM handler** — `signal.SIGTERM`/`SIGINT` trigger graceful shutdown: cancel tasks, await unwinds, close connections.
+8. **Recent trades** — 10s timeout on `get_market_trades()`. On timeout, treats as "no recent trades" (rejects the signal).
+
 ### MCP Server (`src/mcp_server.py`)
 
 Tools: `close_all_positions`, `close_position`, `get_positions`, `get_risk_profile`, `get_performance_report`, `get_parameter_sensitivity`, `get_near_misses`, `get_signal_history`, `get_replay_comparison`. Configured in `.claude/settings.local.json`.

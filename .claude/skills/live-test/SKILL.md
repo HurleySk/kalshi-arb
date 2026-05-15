@@ -81,6 +81,9 @@ Key log patterns to watch for:
 | `ERROR` / `Exception` | Bug or API error — note and investigate |
 | `circuit_breaker` | Check if `circuit_breaker=ok` or triggered |
 | `WebSocket` | Disconnects or reconnects |
+| `stale orderbook` | Orderbook data >5s old for a market — signal evaluation skipped |
+| `UNWIND TIMEOUT` | Unwind process exceeded max time — manual check needed |
+| `timed out` | An API call exceeded its timeout — check connectivity |
 
 ### Step 4: Stop the bot
 
