@@ -72,7 +72,8 @@ class ReplayEngine:
             no_bids_json = row["no_bids_json"] or "{}"
 
             bids = {int(k): v for k, v in json.loads(yes_bids_json).items()}
-            asks = {int(k): v for k, v in json.loads(no_bids_json).items()}
+            # DB stores no-side bids (cents). Convert to yes-side asks: ask_cents = 100 - no_bid_cents
+            asks = {100 - int(k): v for k, v in json.loads(no_bids_json).items()}
             book = Orderbook(bids=bids, asks=asks)
 
             if ts not in grouped:
@@ -326,7 +327,8 @@ def main() -> None:
     train_end_ts = _parse_date_to_ts(args.train_end) if args.train_end else None
     test_start_ts = _parse_date_to_ts(args.test_start) if args.test_start else None
 
-    replay = ReplayEngine(args.db, risk_mode=args.risk_mode)
+    from src.exchanges.kalshi.fee_model import KalshiFeeModel
+    replay = ReplayEngine(args.db, risk_mode=args.risk_mode, fee_model=KalshiFeeModel())
 
     if param_ranges:
         results = replay.sweep(

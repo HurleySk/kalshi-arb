@@ -296,7 +296,7 @@ class MakerManager:
             book = orderbooks.get(ticker)
             if not book:
                 return
-            best_bid = book.best_yes_bid()
+            best_bid = book.best_bid()
             if best_bid is None:
                 await self.cancel_event(event_ticker)
                 return
