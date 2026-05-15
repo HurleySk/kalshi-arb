@@ -35,6 +35,7 @@ class ArbBot:
         }
         self.exchange = create_exchange(self.cfg.exchange, exchange_config)
         self.api = self.exchange.api
+        self.order_builder = self.exchange.order_builder
         self.orderbook_mgr = OrderbookManager()
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
@@ -333,7 +334,7 @@ class ArbBot:
                 for mp in positions_resp.get("market_positions", []):
                     qty = int(float(mp.get("position_fp", "0")))
                     if qty != 0:
-                        close_orders.append(self.api.build_close_order(mp["ticker"], qty))
+                        close_orders.append(self.order_builder.build_close_order(mp["ticker"], qty))
                 if close_orders:
                     await asyncio.wait_for(self.api.batch_create_orders(close_orders),
                                            timeout=self._shutdown_api_timeout)
@@ -451,11 +452,11 @@ class ArbBot:
                     "Boot: found %d inherited short position(s) — closing before trading", len(shorts)
                 )
                 for ticker in shorts:
-                    order = self.api.build_close_order(ticker, -1)
+                    order = self.order_builder.build_close_order(ticker, -1)
                     try:
                         result = await asyncio.wait_for(
                             self.api.batch_create_orders([order]), timeout=15)
-                        inner = self.api.unwrap_order(result.get("orders", [{}])[0])
+                        inner = self.order_builder.unwrap_order(result.get("orders", [{}])[0])
                         logger.info("Boot: closed short %s status=%s", ticker, inner.get("status", "?"))
                     except Exception:
                         logger.exception("Boot: failed to close short: %s", ticker)
@@ -548,6 +549,8 @@ class ArbBot:
                 for mt in self.orderbook_mgr.get_event_markets(event_ticker):
                     book = self.orderbook_mgr.get_orderbook(mt)
                     if book:
+                        # Recorder schema uses yes_bids/no_bids column names;
+                        # core Orderbook.bids = yes-side, .asks = no-side (inverted from no_bids)
                         self.recorder.record_orderbook_snapshot(
                             event_ticker=event_ticker,
                             market_ticker=mt,

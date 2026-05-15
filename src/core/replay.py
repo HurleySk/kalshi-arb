@@ -18,14 +18,17 @@ from typing import Any
 from src.core.engine import ArbEngine
 from src.core.models import Orderbook
 from src.core.risk import load_risk_profile
+from src.ports.fee_model import FeeModel
 
 
 class ReplayEngine:
     """Replay recorded orderbook snapshots against ArbEngine with varying parameters."""
 
-    def __init__(self, db_path: str, risk_mode: str = "conservative") -> None:
+    def __init__(self, db_path: str, risk_mode: str = "conservative",
+                 fee_model: FeeModel | None = None) -> None:
         self._db_path = db_path
         self._risk_mode = risk_mode
+        self._fee_model = fee_model
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
 
@@ -132,7 +135,7 @@ class ReplayEngine:
         for combo in itertools.product(*param_values):
             overrides = dict(zip(param_names, combo))
             profile = load_risk_profile(self._risk_mode, overrides)
-            engine = ArbEngine(risk_profile=profile)
+            engine = ArbEngine(fee_model=self._fee_model, risk_profile=profile)
 
             if use_split:
                 train_count, train_profit = self._evaluate_snapshots(engine, train_snapshots)
