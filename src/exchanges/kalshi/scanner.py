@@ -127,12 +127,30 @@ class MarketScanner:
 
                 if msg_type == "orderbook_snapshot":
                     ticker = data["msg"]["market_ticker"]
-                    self.orderbook_mgr.apply_snapshot(ticker, data["msg"])
+                    snapshot = data["msg"]
+                    bids = {round(float(p) * 100): float(q) for p, q in snapshot.get("yes_dollars_fp", [])}
+                    no_bids = {round(float(p) * 100): float(q) for p, q in snapshot.get("no_dollars_fp", [])}
+                    asks = {100 - cents: qty for cents, qty in no_bids.items()}
+                    self.orderbook_mgr.apply_snapshot(ticker, {"bids": bids, "asks": asks})
                     await self._fire_orderbook_update(ticker)
 
                 elif msg_type == "orderbook_delta":
                     ticker = data["msg"]["market_ticker"]
-                    self.orderbook_mgr.apply_delta(ticker, data["msg"])
+                    delta_msg = data["msg"]
+                    price_dollars = float(delta_msg["price_dollars"])
+                    delta_qty = float(delta_msg["delta_fp"])
+                    side = delta_msg["side"]
+                    if side == "yes":
+                        price_cents = round(price_dollars * 100)
+                        core_side = "bid"
+                    else:
+                        price_cents = round((1.0 - price_dollars) * 100)
+                        core_side = "ask"
+                    self.orderbook_mgr.apply_delta(ticker, {
+                        "price_cents": price_cents,
+                        "delta_qty": delta_qty,
+                        "side": core_side,
+                    })
                     await self._fire_orderbook_update(ticker)
 
                 elif msg_type == "fill":

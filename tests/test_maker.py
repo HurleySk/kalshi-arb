@@ -2,8 +2,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from src.strategies.maker import MakerManager
-from src.models import TradeSignal, Orderbook
-from src.risk import load_risk_profile
+from src.core.models import TradeSignal, Orderbook
+from src.core.risk import load_risk_profile
 
 
 def _make_maker(max_events=3, fill_mode="cancel_and_take"):
@@ -144,8 +144,8 @@ def test_reprice_on_bid_change():
     asyncio.run(maker.post(signal))
 
     new_books = {
-        "M1": Orderbook(yes_bids={53: 100}, no_bids={}),
-        "M2": Orderbook(yes_bids={51: 100}, no_bids={}),
+        "M1": Orderbook(bids={53: 100}, asks={}),
+        "M2": Orderbook(bids={51: 100}, asks={}),
     }
     asyncio.run(
         maker.on_orderbook_update("E1", new_books)
@@ -160,8 +160,8 @@ def test_invalidate_when_arb_dies():
     asyncio.run(maker.post(signal))
 
     bad_books = {
-        "M1": Orderbook(yes_bids={40: 100}, no_bids={}),
-        "M2": Orderbook(yes_bids={50: 100}, no_bids={}),
+        "M1": Orderbook(bids={40: 100}, asks={}),
+        "M2": Orderbook(bids={50: 100}, asks={}),
     }
     asyncio.run(
         maker.on_orderbook_update("E1", bad_books)
@@ -177,8 +177,8 @@ def test_reprice_throttled():
     asyncio.run(maker.post(signal))
 
     books = {
-        "M1": Orderbook(yes_bids={53: 100}, no_bids={}),
-        "M2": Orderbook(yes_bids={51: 100}, no_bids={}),
+        "M1": Orderbook(bids={53: 100}, asks={}),
+        "M2": Orderbook(bids={51: 100}, asks={}),
     }
     asyncio.run(maker.on_orderbook_update("E1", books))
     first_cancel_count = api.cancel_order.call_count
