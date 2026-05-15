@@ -86,3 +86,47 @@ def test_yes_ask_depth_at_sums_matching_no_bids():
 def test_yes_ask_depth_at_returns_zero_when_no_match():
     book = Orderbook(yes_bids={}, no_bids={30: 10.0})
     assert book.yes_ask_depth_at(0.40) == 0.0
+
+
+# --- Core models (src/core/models.py) tests ---
+
+
+def test_core_orderbook_bids_asks():
+    from src.core.models import Orderbook as CoreOrderbook
+    book = CoreOrderbook(
+        bids={55: 10.0, 50: 20.0},
+        asks={57: 5.0, 60: 15.0},
+    )
+    assert book.best_bid() == 0.55
+    assert book.best_ask() == 0.57
+    assert book.bid_depth_at(0.50) == 30.0
+    assert book.bid_depth_at(0.55) == 10.0
+    assert book.ask_depth_at(0.60) == 20.0
+    assert book.ask_depth_at(0.57) == 5.0
+
+
+def test_core_orderbook_empty():
+    from src.core.models import Orderbook as CoreOrderbook
+    book = CoreOrderbook()
+    assert book.best_bid() is None
+    assert book.best_ask() is None
+    assert book.bid_depth_at(0.50) == 0.0
+    assert book.ask_depth_at(0.50) == 0.0
+
+
+def test_core_fill_dataclass():
+    from src.core.models import Fill
+    fill = Fill(
+        order_id="abc", ticker="T-1", price=0.55,
+        quantity=1, side="sell", exchange="kalshi", timestamp=1000.0,
+    )
+    assert fill.exchange == "kalshi"
+    assert fill.side == "sell"
+
+
+def test_core_event_exchange_field():
+    from src.core.models import Event as CoreEvent, Market as CoreMarket
+    m = CoreMarket(ticker="T-1", event_ticker="E-1", title="M1", status="active", exchange="kalshi")
+    e = CoreEvent(event_ticker="E-1", title="Ev", series_ticker="", mutually_exclusive=True, markets=[m], exchange="kalshi")
+    assert e.exchange == "kalshi"
+    assert m.exchange == "kalshi"
