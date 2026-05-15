@@ -228,6 +228,7 @@ class DataRecorder:
                 "DELETE FROM signal_evaluations WHERE session_id = ?", (sid,)
             ).rowcount
             self._conn.commit()
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
             purged_ids.append(sid)
             total_obs_deleted += obs_deleted
@@ -237,6 +238,7 @@ class DataRecorder:
             return None
 
         self._conn.execute("VACUUM")
+        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
         after_mb = os.path.getsize(self._db_path) / (1024 * 1024)
 
@@ -253,11 +255,18 @@ class DataRecorder:
                      before_mb, after_mb)
         return summary
 
-    async def cleanup_loop(self, interval_secs: int = 1800) -> None:
+    async def cleanup_loop(self, interval_secs: float = 1800) -> None:
         """Periodically purge old sessions to keep DB under size cap."""
         while True:
             await asyncio.sleep(interval_secs)
-            self.purge_old_sessions(self._max_db_size_mb, self._min_sessions)
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, self.purge_old_sessions,
+                    self._max_db_size_mb, self._min_sessions,
+                )
+            except Exception:
+                logger.exception("DB cleanup failed, will retry next cycle")
 
     # ------------------------------------------------------------------
     # Record helpers (all guard on _enabled and _session_id)
