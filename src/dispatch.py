@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 class Dispatcher:
+    STALE_THRESHOLD_SECS = 5.0
+
     def __init__(
         self,
         engine: ArbEngine,
@@ -76,7 +78,7 @@ class Dispatcher:
         event_markets = self.orderbook_mgr.get_event_markets(event_ticker)
         for mt in event_markets:
             age = self.orderbook_mgr.market_age(mt)
-            if age > 5.0:
+            if age > self.STALE_THRESHOLD_SECS:
                 logger.warning(
                     "stale orderbook for %s: %s age=%.1fs — skipping signal evaluation",
                     event_ticker, mt, age,

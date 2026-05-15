@@ -30,6 +30,7 @@ class OrderbookManager:
         for t in tickers:
             self._market_to_event.pop(t, None)
             self._books.pop(t, None)
+            self._last_update_ts.pop(t, None)
 
     def get_event_for_market(self, market_ticker: str) -> str | None:
         return self._market_to_event.get(market_ticker)
@@ -217,10 +218,22 @@ class MarketScanner:
 
             except websockets.ConnectionClosed:
                 logger.warning("WebSocket disconnected")
-                await self._reconnect()
+                try:
+                    await self._reconnect()
+                except Exception:
+                    logger.exception("WebSocket reconnect failed — retrying in 5s")
+                    await asyncio.sleep(5)
 
             except Exception:
-                logger.exception("Error processing WebSocket message")
+                if self._ws is None:
+                    logger.warning("WebSocket not connected — attempting reconnect")
+                    try:
+                        await self._reconnect()
+                    except Exception:
+                        logger.exception("WebSocket reconnect failed — retrying in 5s")
+                        await asyncio.sleep(5)
+                else:
+                    logger.exception("Error processing WebSocket message")
 
     async def close(self):
         self._stopping = True
