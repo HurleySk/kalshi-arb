@@ -1,9 +1,9 @@
+from __future__ import annotations
+
 import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
-
-from __future__ import annotations
 
 from src.core.engine import ArbEngine
 from src.core.models import TradeSignal

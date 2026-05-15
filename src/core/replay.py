@@ -68,9 +68,9 @@ class ReplayEngine:
             yes_bids_json = row["yes_bids_json"] or "{}"
             no_bids_json = row["no_bids_json"] or "{}"
 
-            yes_bids = {int(k): v for k, v in json.loads(yes_bids_json).items()}
-            no_bids = {int(k): v for k, v in json.loads(no_bids_json).items()}
-            book = Orderbook(yes_bids=yes_bids, no_bids=no_bids)
+            bids = {int(k): v for k, v in json.loads(yes_bids_json).items()}
+            asks = {int(k): v for k, v in json.loads(no_bids_json).items()}
+            book = Orderbook(bids=bids, asks=asks)
 
             if ts not in grouped:
                 grouped[ts] = {}

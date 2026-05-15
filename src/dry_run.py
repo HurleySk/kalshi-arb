@@ -13,11 +13,12 @@ import asyncio
 import logging
 import sys
 
-from src.engine import ArbEngine
+from src.core.engine import ArbEngine
+from src.core.positions import PositionTracker
+from src.core.replay import ReplayEngine
+from src.core.risk import load_risk_profile
+from src.exchanges.kalshi.fee_model import KalshiFeeModel
 from src.executor import ExecutionManager, TimeoutConfig
-from src.positions import PositionTracker
-from src.replay import ReplayEngine
-from src.risk import load_risk_profile
 from src.simulator import FaultConfig, SimulatedAPI
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class DryRunEngine:
         self._faults = fault_config or FaultConfig()
         self.sim_api = SimulatedAPI(fault_config=self._faults)
         self.risk_profile = load_risk_profile(risk_mode, {})
-        self.engine = ArbEngine(risk_profile=self.risk_profile)
+        self.engine = ArbEngine(fee_model=KalshiFeeModel(), risk_profile=self.risk_profile)
         self.positions = PositionTracker()
         self.executor = ExecutionManager(
             api=self.sim_api,

@@ -9,21 +9,17 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from src.auth import KalshiAuth
-from src.api import KalshiAPI
 from src.config import load_config
 from src.exchanges import create_exchange
-from src.core.orderbook_manager import OrderbookManager as CoreOrderbookManager
-from src.dispatch import Dispatcher
-from src.discovery import EventDiscovery
-from src.engine import ArbEngine
+from src.core.dispatch import Dispatcher
+from src.core.engine import ArbEngine
+from src.core.orderbook_manager import OrderbookManager
+from src.core.positions import PositionTracker
+from src.core.recorder import DataRecorder
+from src.core.risk import load_risk_profile
 from src.executor import ExecutionManager
-from src.positions import PositionTracker
-from src.maker import MakerManager
-from src.risk import load_risk_profile
-from src.two_sided import TwoSidedManager
-from src.scanner import MarketScanner, OrderbookManager
-from src.recorder import DataRecorder
+from src.strategies.maker import MakerManager
+from src.strategies.two_sided import TwoSidedManager
 
 logger = logging.getLogger("kalshi-arb")
 
@@ -31,11 +27,6 @@ logger = logging.getLogger("kalshi-arb")
 class ArbBot:
     def __init__(self, config_path: str):
         self.cfg = load_config(config_path)
-        self.auth = KalshiAuth(
-            api_key_id=self.cfg.api_key_id,
-            private_key_path=self.cfg.private_key_path,
-        )
-        self.api = KalshiAPI(base_url=self.cfg.rest_base_url, auth=self.auth)
         exchange_config = {
             "api_key_id": self.cfg.api_key_id,
             "private_key_path": str(self.cfg.private_key_path),
@@ -43,6 +34,7 @@ class ArbBot:
             "ws_url": self.cfg.ws_url,
         }
         self.exchange = create_exchange(self.cfg.exchange, exchange_config)
+        self.api = self.exchange.api
         self.orderbook_mgr = OrderbookManager()
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
@@ -55,7 +47,9 @@ class ArbBot:
         )
 
         self.engine = ArbEngine(
+            fee_model=self.exchange.fee_model,
             risk_profile=self.risk_profile,
+            constraints=self.exchange.constraints,
             maker_max_horizon_hours=self.cfg.maker_max_horizon_hours,
             max_contracts_per_arb=self.cfg.max_contracts_per_arb,
             recorder=self.recorder,
@@ -63,6 +57,7 @@ class ArbBot:
         self.positions = PositionTracker(recorder=self.recorder)
         self.executor = ExecutionManager(
             api=self.api,
+            order_builder=self.exchange.order_builder,
             positions=self.positions,
             fill_timeout_secs=self.cfg.fill_timeout_secs,
             risk_profile=self.risk_profile,
@@ -75,6 +70,7 @@ class ArbBot:
         )
         self.maker = MakerManager(
             api=self.api,
+            order_builder=self.exchange.order_builder,
             fill_mode=self.cfg.maker_fill_mode,
             max_events=self.cfg.max_maker_events,
             risk_profile=self.risk_profile,
@@ -82,19 +78,17 @@ class ArbBot:
         ) if self.cfg.maker_enabled else None
         self.two_sided = TwoSidedManager(
             api=self.api,
+            order_builder=self.exchange.order_builder,
             risk_profile=self.risk_profile,
         ) if self.risk_profile.two_sided_max_inventory > 0 else None
-        self.scanner = MarketScanner(
-            ws_url=self.cfg.ws_url,
-            auth=self.auth,
-            orderbook_mgr=self.orderbook_mgr,
-            on_orderbook_update=self._on_orderbook_update,
+        self.scanner = self.exchange.create_feed(
+            self.orderbook_mgr,
+            on_update=self._on_orderbook_update,
             on_fill=self._on_fill,
         )
-        self.discovery = EventDiscovery(
-            api=self.api,
-            orderbook_mgr=self.orderbook_mgr,
-            scanner=self.scanner,
+        self.discovery = self.exchange.create_discovery(
+            self.orderbook_mgr,
+            self.scanner,
         )
         self.dispatcher = Dispatcher(
             engine=self.engine,
@@ -556,8 +550,8 @@ class ArbBot:
                         self.recorder.record_orderbook_snapshot(
                             event_ticker=event_ticker,
                             market_ticker=mt,
-                            yes_bids=book.yes_bids,
-                            no_bids=book.no_bids,
+                            yes_bids=book.bids,
+                            no_bids=book.asks,
                         )
 
     async def _balance_loop(self):
