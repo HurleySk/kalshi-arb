@@ -29,14 +29,22 @@ def evaluate_sell_side(
         depth = book.bid_depth_at(bid)
         legs.append((ticker, bid, depth))
 
+    bid_prices = [p for _, p, _ in legs]
+    bid_sum = sum(bid_prices)
+    near_miss = bid_sum >= 0.97
+
     for ticker, price, depth in legs:
         if depth < risk_profile.min_bid_depth:
-            _log_near_miss(event_ticker, "taker", ticker, "depth", depth, risk_profile.min_bid_depth)
+            if near_miss:
+                logger.debug("near-miss %s: bid_sum=%.4f blocked — %s depth %.0f < min %d",
+                             event_ticker, bid_sum, ticker, depth, risk_profile.min_bid_depth)
             return None
         meta = market_metadata.get(ticker, {})
         vol = meta.get("volume_24h", 0)
         if vol < risk_profile.min_volume_24h:
-            _log_near_miss(event_ticker, "taker", ticker, "volume", vol, risk_profile.min_volume_24h)
+            if near_miss:
+                logger.debug("near-miss %s: bid_sum=%.4f blocked — %s volume %.0f < min %.0f",
+                             event_ticker, bid_sum, ticker, vol, risk_profile.min_volume_24h)
             return None
         if risk_profile.min_open_interest > 0:
             if meta.get("open_interest", 0) < risk_profile.min_open_interest:
@@ -44,9 +52,6 @@ def evaluate_sell_side(
         if risk_profile.min_liquidity > 0:
             if meta.get("liquidity", 0) < risk_profile.min_liquidity:
                 return None
-
-    bid_prices = [p for _, p, _ in legs]
-    bid_sum = sum(bid_prices)
     profit = arb_profit(bid_prices, fee_model)
     if profit <= 0:
         if 0.97 <= bid_sum < 1.00:
@@ -193,8 +198,3 @@ def _days_to_expiry(market_metadata: dict[str, dict]) -> float | None:
     return earliest
 
 
-def _log_near_miss(event_ticker, strategy, ticker, filter_name, actual, threshold):
-    logger.debug(
-        "near-miss %s: bid_sum blocked — %s %s/%s < min %s",
-        event_ticker, ticker, filter_name, actual, threshold,
-    )

@@ -92,9 +92,9 @@ class ExecutionManager:
         for i, (ticker, price) in enumerate(signal.legs):
             action = signal.leg_actions[i] if signal.leg_actions else "sell"
             if action == "buy":
-                orders.append(self.order_builder.build_buy_order(ticker=ticker, yes_price=price, quantity=quantity))
+                orders.append(self.order_builder.build_buy_order(ticker, price, quantity))
             else:
-                orders.append(self.order_builder.build_sell_order(ticker=ticker, yes_price=price, quantity=quantity))
+                orders.append(self.order_builder.build_sell_order(ticker, price, quantity))
         return orders
 
     async def execute(self, signal: TradeSignal, quantity: int = 1):
@@ -284,7 +284,7 @@ class ExecutionManager:
         except (asyncio.TimeoutError, Exception):
             logger.warning("Failed to cancel previous unwind order %s — proceeding", prev_oid)
         build = self.order_builder.build_buy_order if action == "buy" else self.order_builder.build_sell_order
-        order = [build(ticker=ticker, yes_price=price_cents / 100, quantity=qty)]
+        order = [build(ticker, price_cents / 100, qty)]
         resp = await asyncio.wait_for(self.api.batch_create_orders(order), timeout=self._timeouts.batch_create)
         inner = self.order_builder.unwrap_order(resp.get("orders", [{}])[0])
         status = inner.get("status", "")
