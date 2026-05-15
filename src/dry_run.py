@@ -77,6 +77,8 @@ class DryRunEngine:
 
                 await self.executor.execute(signal, quantity=signal.quantity)
                 self.executions += 1
+                if self.executor.is_event_blacklisted(event_ticker):
+                    self.partial_fills += 1
 
                 if self.executor._active is None:
                     await asyncio.sleep(0.01)
@@ -151,7 +153,6 @@ async def _main():
     parser.add_argument("--risk-mode", default="conservative")
     parser.add_argument("--partial-fill-rate", type=float, default=0.0)
     parser.add_argument("--ws-race-rate", type=float, default=0.0)
-    parser.add_argument("--rate-limit-rate", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -160,7 +161,6 @@ async def _main():
     faults = FaultConfig(
         partial_fill_rate=args.partial_fill_rate,
         ws_race_rate=args.ws_race_rate,
-        rate_limit_rate=args.rate_limit_rate,
         seed=args.seed,
     )
     engine = DryRunEngine(args.db, risk_mode=args.risk_mode, fault_config=faults)

@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 class FaultConfig:
     partial_fill_rate: float = 0.0
     ws_race_rate: float = 0.0
-    rate_limit_rate: float = 0.0
     seed: int | None = None
 
 

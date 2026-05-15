@@ -242,9 +242,9 @@ class MakerManager:
             resp = await self.api.batch_create_orders(new_order)
             inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
             new_oid = inner.get("order_id", "")
-            if new_oid:
-                self._track_fill_id(new_oid)
             if inner.get("status") == "executed":
+                if new_oid:
+                    self._track_fill_id(new_oid)
                 event.filled[new_oid] = float(inner.get("yes_price_dollars", 0))
                 logger.info("Tighten phase %d filled for %s @ %.2f", phase, ticker, new_price)
             elif new_oid:
@@ -321,8 +321,9 @@ class MakerManager:
                     resp = await self.api.batch_create_orders(new_order)
                     new_inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
                     new_oid = new_inner.get("order_id", "")
-                    if new_oid:
+                    if new_oid and new_inner.get("status") == "executed":
                         self._track_fill_id(new_oid)
+                    if new_oid:
                         self._order_to_event.pop(oid, None)
                         self._order_to_event[new_oid] = event_ticker
                         event.order_ids[ticker] = new_oid
