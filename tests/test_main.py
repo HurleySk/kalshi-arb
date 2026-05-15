@@ -14,6 +14,7 @@ def _make_bot():
         cfg.private_key_path = "fake.pem"
         cfg.rest_base_url = "https://fake"
         cfg.ws_url = "wss://fake"
+        cfg.exchange = "kalshi"
         cfg.risk_mode = "aggressive"
         cfg.strategy_overrides = {}
         cfg.fill_timeout_secs = 30
@@ -36,7 +37,8 @@ def _make_bot():
         with patch("src.main.KalshiAuth"):
             with patch("src.main.KalshiAPI"):
                 with patch("src.main.MarketScanner"):
-                    return ArbBot("fake.yaml")
+                    with patch("src.main.create_exchange"):
+                        return ArbBot("fake.yaml")
 
 
 def _setup_boot_reconcile(bot, *, open_orders=None, positions=None):
