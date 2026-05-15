@@ -27,51 +27,78 @@ pip3 install -r requirements.txt --break-system-packages
 
 ## Architecture
 
+### Ports & Adapters
+
+The codebase uses a ports & adapters pattern to separate exchange-agnostic trading logic from exchange-specific implementations. This enables future support for PredictIt and IBKR ForecastEx alongside Kalshi.
+
+**Dependency rule:** `src/core/` and `src/strategies/` depend only on `src/ports/` (abstract Protocol interfaces). They never import from `src/exchanges/`. `src/main.py` is the composition root that wires exchange adapters to core logic.
+
+```
+src/
+  core/           — exchange-agnostic logic (engine, dispatch, models, fees, risk, recorder)
+  ports/          — abstract Protocol interfaces (FeeModel, ExchangeAPI, OrderBuilder, etc.)
+  exchanges/
+    kalshi/       — Kalshi-specific adapters (API, auth, scanner, discovery, fee model)
+  strategies/     — strategy implementations (taker, maker, two-sided, near-expiry, monotone)
+  executor.py     — order execution (uses ExchangeAPI + OrderBuilder ports)
+  main.py         — composition root (wires exchange → core → strategies)
+```
+
+### Runtime Components
+
 Five async components run concurrently in `ArbBot.run()` (`src/main.py`):
 
-1. **Event Discovery** (`src/discovery.py` → `EventDiscovery.poll_loop`) — REST polls Kalshi for mutually exclusive events with 2+ active markets. Does a full paginated scan on startup (~70 pages, sorted by close_time so near-term events subscribe first), then re-polls page 1 every 60s for new events. Also runs a `cleanup_loop` every 5 minutes to remove expired events from `OrderbookManager` and `market_metadata`.
+1. **Event Discovery** (`exchanges/kalshi/discovery.py` → `KalshiDiscovery.poll_loop`) — REST polls Kalshi for mutually exclusive events with 2+ active markets. Full paginated scan on startup, then re-polls page 1 every 60s. Also runs `cleanup_loop` every 5 minutes to remove expired events.
 
-2. **WebSocket Scanner** (`scanner.MarketScanner` + `scanner.OrderbookManager`) — Maintains real-time orderbook state via `orderbook_delta` channel. On every update, enqueues the market ticker to `_ob_update_queue`. Reconnects automatically on disconnect.
+2. **WebSocket Scanner** (`exchanges/kalshi/scanner.py` → `MarketScanner` + `core/orderbook_manager.py` → `OrderbookManager`) — Maintains real-time orderbook state via `orderbook_delta` channel. On every update, enqueues the market ticker to `_ob_update_queue`. Reconnects automatically on disconnect.
 
-3. **Orderbook Processor** (`_process_orderbook_updates`) — Drains `_ob_update_queue` and routes each update through `Dispatcher` (`src/dispatch.py`). Dispatcher evaluates arb signals, guards duplicate execution per event (pending set), enforces signal cooldowns, and routes fills.
+3. **Orderbook Processor** (`_process_orderbook_updates`) — Drains `_ob_update_queue` and routes each update through `Dispatcher` (`core/dispatch.py`). Dispatcher evaluates arb signals, guards duplicate execution per event, enforces signal cooldowns, and routes fills.
 
-4. **Arb Detection → Execution** (`Dispatcher.process_orderbook_update` → `engine.evaluate` → `executor.execute`) — The hot path. On each orderbook update, evaluates whether selling yes on all outcomes is profitable after taker fees (7%). If profitable and passes filters, fires a batch order via REST API.
+4. **Arb Detection → Execution** (`Dispatcher` → `core/engine.py:ArbEngine` → `strategies/` → `executor.py`) — The hot path. On each orderbook update, evaluates strategies via fee-model-parameterized profit calculations. If profitable and passes filters, fires a batch order via REST API.
 
-5. **Maker Layer** (`engine.evaluate_maker` → `maker.MakerManager`) — When bid sum is between $1.00 and the taker threshold (~$1.07), posts limit orders at best bid prices as maker (0% fees). On fill, completes the arb via cancel_and_take (cancel remaining, taker-complete) or tighten_on_fill (progressively tighten prices). Reprices on orderbook updates, cancels if arb disappears.
+5. **Maker Layer** (`core/engine.py:evaluate_maker` → `strategies/maker.py:MakerManager`) — When bid sum is between $1.00 and the taker threshold (~$1.07), posts limit orders at best bid prices as maker (0% fees). On fill, completes the arb via cancel_and_take or tighten_on_fill. Reprices on orderbook updates, cancels if arb disappears.
 
-6. **Two-Sided Market Making** (`engine.evaluate_two_sided` → `two_sided.TwoSidedManager`) — Per-market spread capture. **Disabled by default** (`two_sided_max_inventory: 0`). When enabled and spread ≥ `two_sided_min_spread_cents + 2`, posts limit bid and ask each 1¢ inside NBBO. On fill, cancels the opposite side and unwinds. Times out unfilled pairs after `two_sided_timeout_secs`.
+6. **Two-Sided Market Making** (`core/engine.py:evaluate_two_sided` → `strategies/two_sided.py:TwoSidedManager`) — Per-market spread capture. **Disabled by default** (`two_sided_max_inventory: 0`). When enabled and spread ≥ `two_sided_min_spread_cents + 2`, posts limit bid and ask each 1¢ inside NBBO. On fill, cancels the opposite side and unwinds. Times out unfilled pairs after `two_sided_timeout_secs`.
 
 ### Key modules
 
-- `src/discovery.py` — `EventDiscovery`: REST scan, register events, cleanup expired; `MonotoneFamilyRegistry`: groups threshold markets by template key
-- `src/dispatch.py` — `Dispatcher`: orderbook update routing, pending guard, fill routing
-- `src/engine.py` — `ArbEngine`: taker, maker, buy-side, near-expiry, monotone, and two-sided signal evaluation
+- `src/core/engine.py` — `ArbEngine`: thin coordinator, delegates to strategy modules
+- `src/core/dispatch.py` — `Dispatcher`: orderbook update routing, pending guard, fill routing
+- `src/core/models.py` — `Orderbook` (bids/asks), `TradeSignal`, `Event`, `Market`, `Fill`
+- `src/core/fees.py` — profit/exposure calculations parameterized by `FeeModel`
+- `src/core/orderbook_manager.py` — `OrderbookManager`: exchange-agnostic orderbook state
+- `src/core/risk.py` — `RiskProfile` dataclass + `load_risk_profile`
+- `src/core/recorder.py` — `DataRecorder`: SQLite-backed recording
+- `src/core/replay.py` — `ReplayEngine`: parameter sweep over recorded history
+- `src/core/analytics.py` — `Analytics`: per-strategy PnL attribution, rejection funnel
+- `src/ports/` — `FeeModel`, `ExchangeAPI`, `OrderBuilder`, `OrderbookFeed`, `MarketDiscovery`, `PositionConstraints`
+- `src/exchanges/kalshi/` — `KalshiExchange` facade, `KalshiAPI`, `KalshiAuth`, `MarketScanner`, `KalshiDiscovery`, `KalshiFeeModel`, `KalshiOrderBuilder`
+- `src/strategies/taker.py` — sell-side and buy-side taker arb evaluation
+- `src/strategies/near_expiry.py` — near-expiry stale order harvesting
+- `src/strategies/monotone.py` — monotone constraint arb
+- `src/strategies/maker.py` — `MakerManager`: limit order posting and fill handling
+- `src/strategies/two_sided.py` — `TwoSidedManager`: paired bid/ask order lifecycle
 - `src/executor.py` — `ExecutionManager`: batch order execution, partial fill unwind
-- `src/maker.py` — `MakerManager`: limit order posting and fill handling
-- `src/scanner.py` — `MarketScanner` + `OrderbookManager`: WebSocket + orderbook state
-- `src/two_sided.py` — `TwoSidedManager`: paired bid/ask order lifecycle, inventory cap, timeout/unwind
-- `src/recorder.py` — `DataRecorder`: SQLite-backed recording of orderbook snapshots, signal evaluations, executions, fills, balances
-- `src/replay.py` — `ReplayEngine`: parameter sweep over recorded orderbook history, train/test split, plateau detection
-- `src/analytics.py` — `Analytics`: per-strategy PnL attribution, rejection funnel, partial fill analysis, balance curve, near-miss distribution
 
 ### Data flow
 
 ```
-REST /events → EventDiscovery.register_events → OrderbookManager.register_event → WS subscribe
+Exchange factory (src/exchanges/) → creates API, Scanner, Discovery adapters
+REST /events → KalshiDiscovery.register_events → OrderbookManager.register_event → WS subscribe
                └─ MonotoneFamilyRegistry.try_register (group threshold markets)
 WS orderbook_delta → OrderbookManager.apply_snapshot/apply_delta → _ob_update_queue
   → Dispatcher.process_orderbook_update
-    → ArbEngine.evaluate (taker: bid sum > $1.07) → ExecutionManager.execute
-    → ArbEngine.evaluate_buy_side (buy all outcomes: ask sum < $1 - fees) → ExecutionManager.execute
-    → ArbEngine.evaluate_near_expiry (relaxed taker within near_expiry_window_minutes) → ExecutionManager.execute
-    → ArbEngine.evaluate_monotone_pair (stacked threshold violation: sell upper, buy lower) → ExecutionManager.execute
-    → ArbEngine.evaluate_maker (maker: bid sum $1.00-$1.07) → MakerManager.post
+    → ArbEngine.evaluate → strategies/taker.evaluate_sell_side → ExecutionManager.execute
+    → ArbEngine.evaluate_buy_side → strategies/taker.evaluate_buy_side → ExecutionManager.execute
+    → ArbEngine.evaluate_near_expiry → strategies/near_expiry.evaluate → ExecutionManager.execute
+    → ArbEngine.evaluate_monotone_pair → strategies/monotone.evaluate → ExecutionManager.execute
+    → ArbEngine.evaluate_maker → MakerManager.post
     → MakerManager.on_orderbook_update (reprice active maker orders)
-    → ArbEngine.evaluate_two_sided (spread ≥ min_spread+2¢ per market) → TwoSidedManager.post
+    → ArbEngine.evaluate_two_sided → TwoSidedManager.post
 WS fill → TwoSidedManager.handle_fill OR Dispatcher.route_fill → executor.handle_fill OR maker.handle_fill
 ```
 
-### Risk Modes (`src/risk.py`)
+### Risk Modes (`src/core/risk.py`)
 
 Three configurable risk profiles control all trading thresholds. Set `risk_mode` in `config.yaml`:
 
@@ -91,12 +118,12 @@ Individual overrides in `config.yaml` take precedence over preset values.
 - `two_sided_min_volume_24h` — volume floor for two-sided candidates
 - `maker_min_volume_24h` — separate volume floor for maker strategy (lower than taker since makers create liquidity; conservative=10, moderate/aggressive=0)
 
-### Key filtering pipeline in `ArbEngine.evaluate()`
+### Key filtering pipeline in `ArbEngine.evaluate()` (via `strategies/taker.evaluate_sell_side`)
 
-1. All markets must have a best yes bid
+1. All markets must have a best bid
 2. `min_bid_depth` check (from risk profile)
 3. `min_volume_24h` check — rejects legs with insufficient 24h trading volume
-4. `arb_profit(bid_prices) > 0` (sum of bids > $1 + taker fees)
+4. `arb_profit(bid_prices, fee_model) > 0` (sum of bids > $1 + fees per exchange fee model)
 5. Time-horizon check: events within `near_term_hours` (24h) use flat `min_profit_pct`; longer-dated must beat `hurdle_rate_annual_pct` annualized
 6. `exposure_ratio <= max_exposure_ratio` (worst-case loss / net premium)
 7. Async `_validate_recent_trades` — when enabled, verifies each leg has recent trade activity before execution
@@ -141,7 +168,9 @@ Tools: `close_all_positions`, `close_position`, `get_positions`, `get_risk_profi
 
 ## Fee Math
 
-Taker fee: `0.07 * price * (1 - price)` per contract. All orders cross the spread (limit orders at best bid fill immediately as taker). The fee is symmetric and maximized at 50¢ (1.75¢/contract).
+Fee calculations are parameterized by `FeeModel` (`src/ports/fee_model.py`). Each exchange provides its own implementation. Profit functions in `src/core/fees.py` accept a `FeeModel` and apply `taker_fee`, `maker_fee`, and `profit_fee` per exchange.
+
+**Kalshi** (`src/exchanges/kalshi/fee_model.py`): Taker fee = `0.07 * price * (1 - price)` per contract. Maker fee = 0%. Profit fee = 0%. The taker fee is symmetric and maximized at 50¢ (1.75¢/contract).
 
 ## API Specifics
 
@@ -152,7 +181,7 @@ Taker fee: `0.07 * price * (1 - price)` per contract. All orders cross the sprea
 
 ## Config
 
-`config.yaml` (gitignored) with `mode: demo|live` and `risk_mode: conservative|moderate|aggressive`. See `config.example.yaml` for all params. Keys live at `~/.kalshi/{demo,live}_private_key.pem`.
+`config.yaml` (gitignored) with `exchange: kalshi`, `mode: demo|live`, and `risk_mode: conservative|moderate|aggressive`. See `config.example.yaml` for all params. Keys live at `~/.kalshi/{demo,live}_private_key.pem`. Credentials support both flat format (`credentials.demo`) and nested format (`credentials.kalshi.demo`) for multi-exchange.
 
 **IMPORTANT:** After any change to config parsing, risk profiles, or strategy parameters, always diff `config.yaml` against `config.example.yaml` and remove stale overrides. Old strategy fields (e.g. `min_bid_depth: 1`) silently override risk profile defaults and can neutralize new protections.
 
@@ -171,5 +200,5 @@ Near-miss signals are logged at DEBUG level (set `logging.level: DEBUG` in confi
 
 ## Known Limitations
 
-- `calculate_event_pnl` in `positions.py` assumes equal fill quantities across all legs
+- `calculate_event_pnl` in `core/positions.py` assumes equal fill quantities across all legs
 - `profit_pct` is relative to $1 max payout, not capital at risk
