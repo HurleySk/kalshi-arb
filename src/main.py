@@ -19,6 +19,7 @@ from src.maker import MakerManager
 from src.risk import load_risk_profile
 from src.two_sided import TwoSidedManager
 from src.scanner import MarketScanner, OrderbookManager
+from src.recorder import DataRecorder
 
 logger = logging.getLogger("kalshi-arb")
 
@@ -35,12 +36,16 @@ class ArbBot:
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
 
+        db_path = self.cfg.recording_db_path if self.cfg.recording_enabled else None
+        self.recorder = DataRecorder(db_path)
+
         self.engine = ArbEngine(
             risk_profile=self.risk_profile,
             maker_max_horizon_hours=self.cfg.maker_max_horizon_hours,
             max_contracts_per_arb=self.cfg.max_contracts_per_arb,
+            recorder=self.recorder,
         )
-        self.positions = PositionTracker()
+        self.positions = PositionTracker(recorder=self.recorder)
         self.executor = ExecutionManager(
             api=self.api,
             positions=self.positions,
@@ -48,6 +53,7 @@ class ArbBot:
             risk_profile=self.risk_profile,
             max_session_loss=self.cfg.max_session_loss,
             circuit_breaker_on_any_loss=self.cfg.circuit_breaker_on_any_loss,
+            recorder=self.recorder,
         )
         self.maker = MakerManager(
             api=self.api,
@@ -81,6 +87,7 @@ class ArbBot:
             near_expiry_window_minutes=self.risk_profile.near_expiry_window_minutes,
             monotone_registry=self.discovery.monotone_registry,
             event_total_markets=self.discovery.event_total_markets,
+            recorder=self.recorder,
         )
         self._ob_update_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10000)
         self._maker_queue: asyncio.Queue | None = None
@@ -401,6 +408,15 @@ class ArbBot:
     async def run(self):
         self._setup_logging()
         self._stats["started_at"] = time.time()
+        self.recorder.start_session({
+            "mode": self.cfg.mode,
+            "risk_mode": self.cfg.risk_mode,
+            "max_contracts_per_arb": self.cfg.max_contracts_per_arb,
+            "maker_enabled": self.cfg.maker_enabled,
+            "circuit_breaker_on_any_loss": self.cfg.circuit_breaker_on_any_loss,
+            "max_session_loss": self.cfg.max_session_loss,
+            "strategy_overrides": self.cfg.strategy_overrides,
+        })
         logger.info("Starting Kalshi Arb Bot in %s mode (risk: %s)",
                      self.cfg.mode.upper(), self.cfg.risk_mode)
 
@@ -420,15 +436,48 @@ class ArbBot:
             tasks.append(maker_task)
         if self.two_sided:
             tasks.append(asyncio.create_task(self.two_sided.timeout_loop()))
+        if self.cfg.recording_enabled:
+            tasks.append(asyncio.create_task(self._snapshot_loop()))
+            tasks.append(asyncio.create_task(self._balance_loop()))
 
         try:
             await asyncio.gather(*tasks)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
+            self.recorder.end_session()
+            self.recorder.close()
             self._print_summary()
             await self.scanner.close()
             await self.api.close()
+
+    async def _snapshot_loop(self):
+        interval = self.cfg.recording_snapshot_interval_secs
+        while True:
+            await asyncio.sleep(interval)
+            for event_ticker in list(self.discovery.event_tickers):
+                for mt in self.orderbook_mgr.get_event_markets(event_ticker):
+                    book = self.orderbook_mgr.get_orderbook(mt)
+                    if book:
+                        self.recorder.record_orderbook_snapshot(
+                            event_ticker=event_ticker,
+                            market_ticker=mt,
+                            yes_bids=book.yes_bids,
+                            no_bids=book.no_bids,
+                        )
+
+    async def _balance_loop(self):
+        interval = self.cfg.recording_balance_poll_interval_secs
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                bal = await self.api.get_balance()
+                self.recorder.record_balance(
+                    cash_cents=bal.get("balance", 0),
+                    portfolio_cents=bal.get("portfolio_value", 0),
+                )
+            except Exception:
+                logger.exception("Failed to record balance")
 
     def _print_summary(self):
         uptime = time.time() - self._stats["started_at"]

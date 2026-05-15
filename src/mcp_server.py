@@ -168,5 +168,232 @@ async def get_risk_profile() -> str:
     return "\n".join(lines)
 
 
+@mcp.tool()
+async def get_performance_report(days: int = 7) -> str:
+    """Get strategy performance report for the last N days.
+    Includes per-strategy PnL, rejection funnel, fill rates, and balance curve.
+
+    Args:
+        days: Number of days to look back (default: 7)
+    """
+    import time as _time
+    from src.analytics import Analytics
+    cfg = load_config(CONFIG_PATH)
+    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
+    analytics = Analytics(db_path)
+    end = _time.time()
+    start = end - (days * 86400)
+    report = analytics.full_report(start=start, end=end)
+    analytics.close()
+    return report
+
+
+@mcp.tool()
+async def get_parameter_sensitivity(
+    parameter: str,
+    range_start: float,
+    range_end: float,
+    step: float,
+    days: int = 7,
+) -> str:
+    """Run a parameter sweep and return sensitivity analysis.
+    Shows signal count and theoretical profit at each parameter value.
+    Highlights plateau regions for robust parameter selection.
+
+    Args:
+        parameter: Parameter name (e.g. min_profit_pct, min_bid_depth)
+        range_start: Start of sweep range
+        range_end: End of sweep range
+        step: Step size
+        days: Days of data to use (default: 7)
+    """
+    import time as _time
+    from src.replay import ReplayEngine
+    cfg = load_config(CONFIG_PATH)
+    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
+    engine = ReplayEngine(db_path, risk_mode=cfg.risk_mode)
+
+    values = []
+    v = range_start
+    while v <= range_end + step / 2:
+        values.append(round(v, 6))
+        v += step
+
+    end = _time.time()
+    start = end - (days * 86400)
+    results = engine.sweep({parameter: values}, start=start, end=end)
+
+    lines = [f"Parameter Sensitivity: {parameter}", "-" * 50]
+    max_profit = max((abs(r["theoretical_profit"]) for r in results), default=1) or 1
+    for r in results:
+        val = r["params"][parameter]
+        sc = r["signal_count"]
+        profit = r["theoretical_profit"]
+        bar_len = int(abs(profit) / max_profit * 20)
+        bar = "█" * bar_len
+        lines.append(f"  {val:8.2f} │ {sc:3d} signals │ ${profit:8.4f} │ {bar}")
+
+    plateaus = engine.find_plateaus(results, parameter)
+    if plateaus:
+        lines.append(f"\nPlateau regions (robust values):")
+        for lo, hi in plateaus:
+            lines.append(f"  {lo} → {hi}")
+
+    engine.close()
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_near_misses(
+    strategy: str = "all",
+    threshold_pct: float = 0.5,
+    days: int = 1,
+) -> str:
+    """Get signals that nearly fired but were rejected.
+    Useful for identifying if thresholds are too tight.
+
+    Args:
+        strategy: Filter by strategy type, or "all" (default: "all")
+        threshold_pct: How close to firing threshold to include (default: 0.5%)
+        days: Days to look back (default: 1)
+    """
+    import time as _time
+    from src.analytics import Analytics
+    cfg = load_config(CONFIG_PATH)
+    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
+    analytics = Analytics(db_path)
+    end = _time.time()
+    start = end - (days * 86400)
+    nm = analytics.near_miss_analysis(start=start, end=end)
+    analytics.close()
+
+    lines = [f"Near-Miss Analysis (last {days} day(s))", "-" * 50]
+    lines.append(f"Total near-misses: {nm['total_near_misses']}")
+    if nm["by_strategy"]:
+        for strat, count in sorted(nm["by_strategy"].items(), key=lambda x: -x[1]):
+            if strategy == "all" or strategy == strat:
+                lines.append(f"  {strat}: {count}")
+    if nm["best_miss"]:
+        lines.append(f"\nBest missed opportunity:")
+        lines.append(f"  {nm['best_miss']['event_ticker']} (bid_sum={nm['best_miss']['bid_sum']:.4f})")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_signal_history(
+    strategy: str = "all",
+    outcome: str = "all",
+    days: int = 7,
+    limit: int = 50,
+) -> str:
+    """Get historical signal evaluations with filtering.
+
+    Args:
+        strategy: Filter by strategy type (taker, buy_side, near_expiry, monotone, maker, two_sided, or "all")
+        outcome: Filter by outcome (fire, reject, near_miss, or "all")
+        days: Days to look back (default: 7)
+        limit: Max results to return (default: 50)
+    """
+    import sqlite3
+    import time as _time
+    from datetime import datetime, timezone
+    cfg = load_config(CONFIG_PATH)
+    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
+    conn = sqlite3.connect(db_path)
+
+    end = _time.time()
+    start = end - (days * 86400)
+    conditions = ["timestamp >= ?", "timestamp <= ?"]
+    params: list = [start, end]
+    if strategy != "all":
+        conditions.append("strategy = ?")
+        params.append(strategy)
+    if outcome != "all":
+        conditions.append("outcome = ?")
+        params.append(outcome)
+
+    where = " AND ".join(conditions)
+    rows = conn.execute(
+        f"SELECT timestamp, event_ticker, strategy, outcome, bid_sum, profit_pct FROM signal_evaluations WHERE {where} ORDER BY timestamp DESC LIMIT ?",
+        params + [limit],
+    ).fetchall()
+    conn.close()
+
+    lines = [f"Signal History (last {days} day(s), {strategy}/{outcome})", "-" * 70]
+    for ts, event, strat, out, bid_sum, profit_pct in rows:
+        dt_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%m-%d %H:%M:%S")
+        bid_str = f"bid={bid_sum:.4f}" if bid_sum else "bid=N/A"
+        pct_str = f"pct={profit_pct:.2f}%" if profit_pct else ""
+        lines.append(f"  {dt_str} │ {strat:12s} │ {out:9s} │ {event} │ {bid_str} {pct_str}")
+
+    lines.append(f"\n{len(rows)} results (limit {limit})")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_replay_comparison(
+    parameter: str,
+    current_value: float,
+    proposed_value: float,
+    days: int = 7,
+) -> str:
+    """Compare current vs proposed parameter values using replay.
+    Shows side-by-side signal counts, theoretical profit, and risk metrics.
+    Uses train/test split automatically (first half train, second half test).
+
+    Args:
+        parameter: Parameter to compare
+        current_value: Current parameter value
+        proposed_value: Proposed new value
+        days: Days of data to use (default: 7)
+    """
+    import time as _time
+    from src.replay import ReplayEngine
+    cfg = load_config(CONFIG_PATH)
+    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
+    engine = ReplayEngine(db_path, risk_mode=cfg.risk_mode)
+
+    end = _time.time()
+    start = end - (days * 86400)
+    midpoint = start + (end - start) / 2
+
+    results = engine.sweep(
+        {parameter: [current_value, proposed_value]},
+        start=start, end=end,
+        train_end=midpoint, test_start=midpoint,
+    )
+    engine.close()
+
+    if len(results) < 2:
+        return "Insufficient data for comparison."
+
+    current = results[0]
+    proposed = results[1]
+
+    lines = [
+        f"Replay Comparison: {parameter}",
+        "=" * 60,
+        f"{'':20s} │ {'Current':>12s} │ {'Proposed':>12s}",
+        "-" * 60,
+        f"{'Value':20s} │ {current_value:12.2f} │ {proposed_value:12.2f}",
+        f"{'Train signals':20s} │ {current['train_signal_count']:12d} │ {proposed['train_signal_count']:12d}",
+        f"{'Train profit':20s} │ ${current['train_theoretical_profit']:11.4f} │ ${proposed['train_theoretical_profit']:11.4f}",
+        f"{'Test signals':20s} │ {current['test_signal_count']:12d} │ {proposed['test_signal_count']:12d}",
+        f"{'Test profit':20s} │ ${current['test_theoretical_profit']:11.4f} │ ${proposed['test_theoretical_profit']:11.4f}",
+        f"{'Total signals':20s} │ {current['signal_count']:12d} │ {proposed['signal_count']:12d}",
+        f"{'Total profit':20s} │ ${current['theoretical_profit']:11.4f} │ ${proposed['theoretical_profit']:11.4f}",
+        "=" * 60,
+    ]
+
+    delta_signals = proposed["signal_count"] - current["signal_count"]
+    delta_profit = proposed["theoretical_profit"] - current["theoretical_profit"]
+    lines.append(f"Delta: {delta_signals:+d} signals, ${delta_profit:+.4f} profit")
+    if proposed["test_theoretical_profit"] < current["test_theoretical_profit"]:
+        lines.append("WARNING: Proposed value performs WORSE on out-of-sample test data")
+
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     mcp.run()

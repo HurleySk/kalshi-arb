@@ -50,6 +50,9 @@ Five async components run concurrently in `ArbBot.run()` (`src/main.py`):
 - `src/maker.py` — `MakerManager`: limit order posting and fill handling
 - `src/scanner.py` — `MarketScanner` + `OrderbookManager`: WebSocket + orderbook state
 - `src/two_sided.py` — `TwoSidedManager`: paired bid/ask order lifecycle, inventory cap, timeout/unwind
+- `src/recorder.py` — `DataRecorder`: SQLite-backed recording of orderbook snapshots, signal evaluations, executions, fills, balances
+- `src/replay.py` — `ReplayEngine`: parameter sweep over recorded orderbook history, train/test split, plateau detection
+- `src/analytics.py` — `Analytics`: per-strategy PnL attribution, rejection funnel, partial fill analysis, balance curve, near-miss distribution
 
 ### Data flow
 
@@ -114,7 +117,7 @@ On partial fill (some legs fill, others don't), the executor:
 
 ### MCP Server (`src/mcp_server.py`)
 
-Tools: `close_all_positions`, `close_position`, `get_positions`, `get_risk_profile`. Configured in `.claude/settings.local.json`.
+Tools: `close_all_positions`, `close_position`, `get_positions`, `get_risk_profile`, `get_performance_report`, `get_parameter_sensitivity`, `get_near_misses`, `get_signal_history`, `get_replay_comparison`. Configured in `.claude/settings.local.json`.
 
 ## Fee Math
 
@@ -132,6 +135,8 @@ Taker fee: `0.07 * price * (1 - price)` per contract. All orders cross the sprea
 `config.yaml` (gitignored) with `mode: demo|live` and `risk_mode: conservative|moderate|aggressive`. See `config.example.yaml` for all params. Keys live at `~/.kalshi/{demo,live}_private_key.pem`.
 
 **IMPORTANT:** After any change to config parsing, risk profiles, or strategy parameters, always diff `config.yaml` against `config.example.yaml` and remove stale overrides. Old strategy fields (e.g. `min_bid_depth: 1`) silently override risk profile defaults and can neutralize new protections.
+
+`recording:` section controls data recording to SQLite (enabled by default). Data is stored at `data/arb_history.db`. Use `python3 -m src.analytics` for reports and `python3 -m src.replay --sweep` for parameter sweep analysis. See `config.example.yaml` for recording options.
 
 ## Observability
 

@@ -118,3 +118,46 @@ def test_load_config_maker_defaults():
     assert cfg.maker_enabled is True
     assert cfg.maker_fill_mode == "cancel_and_take"
     assert cfg.max_maker_events == 3
+
+
+def test_recording_config_defaults(tmp_path):
+    """Recording config should have sensible defaults when section is omitted."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+mode: demo
+credentials:
+  demo:
+    api_key_id: test
+    private_key_path: /tmp/fake.pem
+strategy:
+  risk_mode: conservative
+""")
+    cfg = load_config(str(cfg_file))
+    assert cfg.recording_enabled is True
+    assert cfg.recording_db_path == "data/arb_history.db"
+    assert cfg.recording_snapshot_interval_secs == 5
+    assert cfg.recording_balance_poll_interval_secs == 300
+
+
+def test_recording_config_custom(tmp_path):
+    """Recording config should read custom values from yaml."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+mode: demo
+credentials:
+  demo:
+    api_key_id: test
+    private_key_path: /tmp/fake.pem
+strategy:
+  risk_mode: conservative
+recording:
+  enabled: false
+  db_path: custom/path.db
+  snapshot_interval_secs: 10
+  balance_poll_interval_secs: 600
+""")
+    cfg = load_config(str(cfg_file))
+    assert cfg.recording_enabled is False
+    assert cfg.recording_db_path == "custom/path.db"
+    assert cfg.recording_snapshot_interval_secs == 10
+    assert cfg.recording_balance_poll_interval_secs == 600

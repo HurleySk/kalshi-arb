@@ -140,6 +140,8 @@ For each signal that fired, verify:
 /analyze-positions close-bad
 ```
 
+If the bot ran for more than 60 seconds and analytics recording is enabled, also run `/post-run-analyst` for a detailed performance assessment with tuning recommendations.
+
 **Do not skip this step, even if you found bugs or errors in Step 5.** Bug investigation comes AFTER position cleanup. Pseudo-arb positions left open become realized losses.
 
 ### Step 7: Write up findings

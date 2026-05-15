@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock
 from src.engine import ArbEngine
 from src.models import Orderbook
 from src.risk import RiskProfile, load_risk_profile
@@ -671,3 +672,23 @@ def test_evaluate_two_sided_disabled_when_max_inventory_zero():
     book = Orderbook(yes_bids={40: 50}, no_bids={40: 50})
     signal = engine.evaluate_two_sided("M1", book, volume_24h=100.0)
     assert signal is None
+
+
+# --- near-miss recording tests ---
+
+def test_evaluate_records_near_miss():
+    """Engine should call recorder.record_signal for taker near-misses."""
+    engine = _make_engine(min_profit_pct=2.0, max_exposure_ratio=10.0)
+    recorder = MagicMock()
+    engine.recorder = recorder
+    books = {
+        "MKT-1": Orderbook(yes_bids={49: 10}),
+        "MKT-2": Orderbook(yes_bids={49: 10}),
+    }
+    # bid_sum = 0.98, which is >= 0.97 near-miss threshold but not profitable
+    result = engine.evaluate("EVT-A", books)
+    assert result is None
+    recorder.record_signal.assert_called_once()
+    call_kwargs = recorder.record_signal.call_args[1]
+    assert call_kwargs["outcome"] == "near_miss"
+    assert call_kwargs["strategy"] == "taker"
