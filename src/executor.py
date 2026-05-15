@@ -27,6 +27,7 @@ class ArbExecution:
     filled: dict[str, float] = field(default_factory=dict)
     filled_legs: list[FilledLeg] = field(default_factory=list)
     started_at: float = 0.0
+    _needs_unwind: bool = False
 
 
 class ExecutionManager:
@@ -49,6 +50,8 @@ class ExecutionManager:
         self._processed_fill_ids: OrderedDict[str, None] = OrderedDict()
         self._max_session_loss = max_session_loss
         self._circuit_breaker_on_any_loss = circuit_breaker_on_any_loss
+        self._unwind_tasks: list[asyncio.Task] = []
+        self._on_circuit_breaker: asyncio.Future | None = None
 
     def is_event_blacklisted(self, event_ticker: str) -> bool:
         return event_ticker in self._failed_events
@@ -58,6 +61,15 @@ class ExecutionManager:
 
     def is_executing(self) -> bool:
         return self._executing
+
+    async def cancel_unwinds(self):
+        """Cancel active unwind tasks during shutdown."""
+        for task in self._unwind_tasks:
+            if not task.done():
+                task.cancel()
+        if self._unwind_tasks:
+            await asyncio.gather(*self._unwind_tasks, return_exceptions=True)
+            self._unwind_tasks.clear()
 
     def _track_fill_id(self, order_id: str):
         self._processed_fill_ids[order_id] = None
@@ -160,6 +172,12 @@ class ExecutionManager:
 
             await self._monitor_fills(execution)
 
+            if getattr(execution, '_needs_unwind', False):
+                self._executing = False
+                self._active = None
+                self._launch_unwind(execution)
+                return
+
             if self.recorder:
                 filled_count = len(execution.filled)
                 total_count = len(execution.order_ids)
@@ -213,9 +231,7 @@ class ExecutionManager:
                     execution.signal.event_ticker, filled_count, len(unfilled),
                 )
                 self._failed_events.add(execution.signal.event_ticker)
-                self._executing = False
-                self._active = None
-                self._launch_unwind(execution)
+                execution._needs_unwind = True
 
     def _record_unwind_loss(self, ticker: str, sell_price: float, buy_price: float, qty: int):
         loss = (buy_price - sell_price) * qty
@@ -251,29 +267,40 @@ class ExecutionManager:
         """Launch unwind as a detached task so the executor is free for new signals."""
         max_unwind_secs = (self._unwind_phase1_secs + self._unwind_phase2_secs) * len(execution.filled_legs) + 60
         task = asyncio.create_task(self._unwind_with_timeout(execution, max_unwind_secs))
+        self._unwind_tasks.append(task)
         task.add_done_callback(self._unwind_done_callback)
 
     def _unwind_done_callback(self, task: asyncio.Task):
         try:
             task.result()
+        except asyncio.CancelledError:
+            logger.warning("Unwind task was cancelled")
         except Exception:
             logger.exception("Unwind task crashed")
+        self._unwind_tasks = [t for t in self._unwind_tasks if not t.done()]
+        if self._circuit_breaker_tripped and self._on_circuit_breaker:
+            self._on_circuit_breaker.set_result(True)
 
     async def _unwind_with_timeout(self, execution: ArbExecution, timeout_secs: float):
+        completed_tickers: set[str] = set()
         try:
-            await asyncio.wait_for(self._unwind_partial_fill(execution), timeout=timeout_secs)
+            await asyncio.wait_for(
+                self._unwind_partial_fill(execution, completed_tickers), timeout=timeout_secs)
         except asyncio.TimeoutError:
+            remaining = [l for l in execution.filled_legs if l.ticker not in completed_tickers]
             logger.critical(
-                "UNWIND TIMEOUT after %ds for %s — manual intervention required",
+                "UNWIND TIMEOUT after %.0fs for %s — %d/%d legs incomplete, manual intervention required",
                 timeout_secs, execution.signal.event_ticker,
+                len(remaining), len(execution.filled_legs),
             )
-            for leg in execution.filled_legs:
+            for leg in remaining:
                 if leg.unwind_action == "buy":
                     self._record_unwind_loss(leg.ticker, leg.fill_price, 0.99, leg.quantity)
                 else:
                     self._record_unwind_loss(leg.ticker, 0.01, leg.fill_price, leg.quantity)
 
-    async def _unwind_partial_fill(self, execution: ArbExecution):
+    async def _unwind_partial_fill(self, execution: ArbExecution,
+                                    completed_tickers: set[str] | None = None):
         step = self._unwind_price_step_cents / 100.0
 
         for leg in execution.filled_legs:
@@ -333,6 +360,8 @@ class ExecutionManager:
                 self._record_unwind_loss(leg.ticker, leg.fill_price, unwind_price, leg.quantity)
             else:
                 self._record_unwind_loss(leg.ticker, unwind_price, leg.fill_price, leg.quantity)
+            if completed_tickers is not None:
+                completed_tickers.add(leg.ticker)
             if not filled:
                 logger.error("All %d unwind phases exhausted for %s — last order still resting, loss estimated", len(phases), leg.ticker)
             logger.warning("Unwind complete for %s: final @ $%.2f", leg.ticker, unwind_price)
