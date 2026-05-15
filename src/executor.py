@@ -95,7 +95,7 @@ class ExecutionManager:
         if signal.leg_actions and all(a == "buy" for a in signal.leg_actions):
             required = sum(price for _, price in signal.legs) * quantity
             try:
-                bal = await self.api.get_balance()
+                bal = await asyncio.wait_for(self.api.get_balance(), timeout=10)
                 available = bal.get("balance", 0) / 100.0
                 if available < required:
                     logger.warning(
@@ -114,7 +114,7 @@ class ExecutionManager:
                 signal.event_ticker, len(signal.legs), signal.net_profit, signal.profit_pct,
             )
 
-            response = await self.api.batch_create_orders(orders)
+            response = await asyncio.wait_for(self.api.batch_create_orders(orders), timeout=15)
             logger.info("Batch order response: %s", response)
             order_list = response.get("orders", [])
             execution = ArbExecution(
@@ -158,7 +158,7 @@ class ExecutionManager:
                         "Buy-side resting legs detected for %s: %d/%d filled, cancelling %d immediately",
                         signal.event_ticker, len(execution.filled), len(execution.order_ids), len(resting_ids),
                     )
-                    await self.api.batch_cancel_orders(resting_ids)
+                    await asyncio.wait_for(self.api.batch_cancel_orders(resting_ids), timeout=10)
                     if execution.filled:
                         logger.error(
                             "PARTIAL FILL on %s: %d legs filled, %d cancelled — UNHEDGED EXPOSURE",
@@ -224,7 +224,7 @@ class ExecutionManager:
                 "Timeout: %d/%d legs filled for %s, cancelling %d unfilled",
                 filled_count, total_count, execution.signal.event_ticker, len(unfilled),
             )
-            await self.api.batch_cancel_orders(unfilled)
+            await asyncio.wait_for(self.api.batch_cancel_orders(unfilled), timeout=10)
             if filled_count > 0:
                 logger.error(
                     "PARTIAL FILL on %s: %d legs filled, %d cancelled — UNHEDGED EXPOSURE",
