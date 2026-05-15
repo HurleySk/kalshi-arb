@@ -52,3 +52,10 @@ def test_kalshi_constraints_conforms():
     c = KalshiConstraints()
     assert c.max_position_size("T-1") is None
     assert c.max_total_exposure() is None
+
+
+def test_exchange_factory():
+    from src.exchanges import create_exchange
+    import pytest
+    with pytest.raises(KeyError):
+        create_exchange("nonexistent", {})
