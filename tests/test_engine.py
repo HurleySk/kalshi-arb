@@ -957,7 +957,8 @@ def test_core_engine_two_sided_signal():
     assert signal.leg_actions == ["buy", "sell"]
 
 
-def test_taker_rejects_far_dated_below_hurdle():
+def test_taker_sell_side_no_hurdle_rate():
+    """Sell-side taker has no hurdle rate — matches original ArbEngine.evaluate() behavior."""
     from src.core.models import Orderbook as CoreOB
     from src.core.risk import load_risk_profile
     from src.exchanges.kalshi.fee_model import KalshiFeeModel
@@ -976,7 +977,7 @@ def test_taker_rejects_far_dated_below_hurdle():
         "T-3": {"close_time": "2099-01-01T00:00:00Z", "volume_24h": 100},
     }
     signal = evaluate_sell_side("E-1", books, meta, fm, rp)
-    assert signal is None
+    assert signal is not None
 
 
 def test_core_orderbook_manager_market_age_unregistered():

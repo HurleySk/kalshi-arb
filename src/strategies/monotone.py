@@ -13,6 +13,7 @@ def evaluate(
     lower_ticker: str,
     lower_book: Orderbook,
     fee_model: FeeModel,
+    min_profit_pct: float = 0.0,
 ) -> TradeSignal | None:
     upper_bid = upper_book.best_bid()
     lower_ask = lower_book.best_ask()
@@ -24,6 +25,8 @@ def evaluate(
         return None
 
     profit_pct = profit * 100.0
+    if profit_pct < min_profit_pct:
+        return None
 
     return TradeSignal(
         event_ticker=f"{upper_ticker}|{lower_ticker}",
