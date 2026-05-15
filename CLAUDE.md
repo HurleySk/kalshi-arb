@@ -107,14 +107,18 @@ Individual overrides in `config.yaml` take precedence over preset values.
 
 On partial fill (some legs fill, others don't), the executor:
 1. Blacklists the event permanently (no re-execution)
-2. Runs 5-phase graduated unwind on filled legs:
+2. Releases the executor lock (`_executing = False`) immediately so new arbs can be processed
+3. Launches a **detached async task** (`_launch_unwind`) for graduated unwind — does NOT block the main trading pipeline
+4. Runs 5-phase graduated unwind on filled legs:
    - Phase 1: fill_price ± 1×step (immediate)
    - Phase 2: fill_price ± 2×step (after `unwind_phase1_secs`)
    - Phase 3: fill_price ± 4×step (after `unwind_phase2_secs - phase1`)
    - Phase 4: 50% toward floor/ceiling, monotonically bounded (after `unwind_phase2_secs`)
    - Phase 5: absolute floor $0.01 / ceiling $0.99 (after `unwind_phase2_secs`)
-3. Phase timings are configurable per risk mode via `unwind_phase1_secs`, `unwind_phase2_secs`, `unwind_price_step_cents`
-4. Emergency shutdown (`_emergency_shutdown`) retries 3× with exponential backoff; cancel and close operations are independent so a 429 on cancels doesn't block position closes
+5. Each unwind API call has a 15s timeout; cancel calls have 10s timeout. If a phase times out, it advances to the next phase instead of hanging.
+6. Overall unwind has a timeout of `(phase1 + phase2) × num_legs + 60s`. On timeout, records worst-case loss and trips circuit breaker.
+7. Phase timings are configurable per risk mode via `unwind_phase1_secs`, `unwind_phase2_secs`, `unwind_price_step_cents`
+8. Emergency shutdown (`_emergency_shutdown`) retries 3× with exponential backoff; cancel and close operations are independent so a 429 on cancels doesn't block position closes
 
 ### MCP Server (`src/mcp_server.py`)
 

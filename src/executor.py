@@ -153,7 +153,9 @@ class ExecutionManager:
                             signal.event_ticker, len(execution.filled), len(resting_ids),
                         )
                         self._failed_events.add(signal.event_ticker)
-                        await self._unwind_partial_fill(execution)
+                        self._executing = False
+                        self._active = None
+                        self._launch_unwind(execution)
                     return
 
             await self._monitor_fills(execution)
@@ -211,7 +213,9 @@ class ExecutionManager:
                     execution.signal.event_ticker, filled_count, len(unfilled),
                 )
                 self._failed_events.add(execution.signal.event_ticker)
-                await self._unwind_partial_fill(execution)
+                self._executing = False
+                self._active = None
+                self._launch_unwind(execution)
 
     def _record_unwind_loss(self, ticker: str, sell_price: float, buy_price: float, qty: int):
         loss = (buy_price - sell_price) * qty
@@ -229,16 +233,45 @@ class ExecutionManager:
 
     async def _execute_unwind_phase(self, ticker: str, price_cents: int, qty: int,
                                     prev_oid: str | None, action: str = "buy") -> tuple[bool, float, str]:
-        if prev_oid:
-            await self.api.cancel_order(prev_oid)
+        try:
+            if prev_oid:
+                await asyncio.wait_for(self.api.cancel_order(prev_oid), timeout=10)
+        except (asyncio.TimeoutError, Exception):
+            logger.warning("Failed to cancel previous unwind order %s — proceeding", prev_oid)
         build = self.api.build_buy_order if action == "buy" else self.api.build_sell_order
         order = [build(ticker=ticker, yes_price=price_cents / 100, quantity=qty)]
-        resp = await self.api.batch_create_orders(order)
+        resp = await asyncio.wait_for(self.api.batch_create_orders(order), timeout=15)
         inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
         status = inner.get("status", "")
         unwind_price = float(inner.get("yes_price_dollars", 0))
         oid = inner.get("order_id", "")
         return status == "executed", unwind_price, oid
+
+    def _launch_unwind(self, execution: ArbExecution):
+        """Launch unwind as a detached task so the executor is free for new signals."""
+        max_unwind_secs = (self._unwind_phase1_secs + self._unwind_phase2_secs) * len(execution.filled_legs) + 60
+        task = asyncio.create_task(self._unwind_with_timeout(execution, max_unwind_secs))
+        task.add_done_callback(self._unwind_done_callback)
+
+    def _unwind_done_callback(self, task: asyncio.Task):
+        try:
+            task.result()
+        except Exception:
+            logger.exception("Unwind task crashed")
+
+    async def _unwind_with_timeout(self, execution: ArbExecution, timeout_secs: float):
+        try:
+            await asyncio.wait_for(self._unwind_partial_fill(execution), timeout=timeout_secs)
+        except asyncio.TimeoutError:
+            logger.critical(
+                "UNWIND TIMEOUT after %ds for %s — manual intervention required",
+                timeout_secs, execution.signal.event_ticker,
+            )
+            for leg in execution.filled_legs:
+                if leg.unwind_action == "buy":
+                    self._record_unwind_loss(leg.ticker, leg.fill_price, 0.99, leg.quantity)
+                else:
+                    self._record_unwind_loss(leg.ticker, 0.01, leg.fill_price, leg.quantity)
 
     async def _unwind_partial_fill(self, execution: ArbExecution):
         step = self._unwind_price_step_cents / 100.0
@@ -273,9 +306,18 @@ class ExecutionManager:
             for phase_i, (price_fn, wait_secs) in enumerate(phases, 1):
                 if wait_secs > 0:
                     await asyncio.sleep(wait_secs)
-                price = price_fn(leg.fill_price)
-                filled, unwind_price, prev_oid = await self._execute_unwind_phase(
-                    leg.ticker, round(price * 100), leg.quantity, prev_oid, leg.unwind_action)
+                try:
+                    price = price_fn(leg.fill_price)
+                    filled, unwind_price, prev_oid = await self._execute_unwind_phase(
+                        leg.ticker, round(price * 100), leg.quantity, prev_oid, leg.unwind_action)
+                except asyncio.TimeoutError:
+                    logger.warning("Unwind phase %d timed out for %s — advancing to next phase", phase_i, leg.ticker)
+                    prev_oid = None
+                    continue
+                except Exception:
+                    logger.exception("Unwind phase %d failed for %s — advancing to next phase", phase_i, leg.ticker)
+                    prev_oid = None
+                    continue
                 if filled:
                     logger.info("Unwind phase %d filled for %s @ %.2f", phase_i, leg.ticker, price)
                     if prev_oid:

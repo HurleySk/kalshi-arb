@@ -109,7 +109,11 @@ def test_unwind_fires_on_partial_fill():
     executor, api, _ = _partial_fill_executor(fill_timeout=1)
     signal = _medlan_signal()
 
-    asyncio.run(executor.execute(signal, quantity=1))
+    async def _run():
+        await executor.execute(signal, quantity=1)
+        await asyncio.sleep(0.1)
+
+    asyncio.run(_run())
 
     assert api.batch_create_orders.call_count >= 2
     unwind_call = api.batch_create_orders.call_args_list[1]
