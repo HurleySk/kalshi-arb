@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 from src.api import KalshiAPI
@@ -12,12 +13,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class FilledLeg:
+    ticker: str
+    fill_price: float
+    quantity: int
+    unwind_action: str
+
+
+@dataclass
 class ArbExecution:
     signal: TradeSignal
     order_ids: list[str] = field(default_factory=list)
     filled: dict[str, float] = field(default_factory=dict)
+    filled_legs: list[FilledLeg] = field(default_factory=list)
     started_at: float = 0.0
-    batch_response: list[dict] = field(default_factory=list)
 
 
 class ExecutionManager:
@@ -35,7 +44,7 @@ class ExecutionManager:
         self._unwind_price_step_cents = risk_profile.unwind_price_step_cents if risk_profile else 3
         self.session_realized_loss = 0.0
         self._circuit_breaker_tripped = False
-        self._processed_fill_ids: set[str] = set()
+        self._processed_fill_ids: OrderedDict[str, None] = OrderedDict()
         self._max_session_loss = max_session_loss
         self._circuit_breaker_on_any_loss = circuit_breaker_on_any_loss
 
@@ -47,6 +56,11 @@ class ExecutionManager:
 
     def is_executing(self) -> bool:
         return self._executing
+
+    def _track_fill_id(self, order_id: str):
+        self._processed_fill_ids[order_id] = None
+        if len(self._processed_fill_ids) > 10_000:
+            self._processed_fill_ids.popitem(last=False)
 
     def build_orders(self, signal: TradeSignal, quantity: int) -> list[dict]:
         orders = []
@@ -93,11 +107,10 @@ class ExecutionManager:
                 signal=signal,
                 order_ids=[self.api.unwrap_order(o).get("order_id", "") for o in order_list],
                 started_at=time.time(),
-                batch_response=order_list,
             )
             self._active = execution
 
-            for o in order_list:
+            for i, o in enumerate(order_list):
                 inner = self.api.unwrap_order(o)
                 if inner.get("status") == "executed":
                     oid = inner.get("order_id", "")
@@ -105,7 +118,16 @@ class ExecutionManager:
                     qty = int(float(inner.get("fill_count_fp", 0)))
                     execution.filled[oid] = price
                     if oid:
-                        self._processed_fill_ids.add(oid)
+                        self._track_fill_id(oid)
+                    original_action = (
+                        signal.leg_actions[i] if signal.leg_actions and i < len(signal.leg_actions) else "sell"
+                    )
+                    execution.filled_legs.append(FilledLeg(
+                        ticker=inner.get("ticker", ""),
+                        fill_price=price,
+                        quantity=qty,
+                        unwind_action="sell" if original_action == "buy" else "buy",
+                    ))
                     self.positions.record_fill(
                         ticker=inner.get("ticker", ""),
                         side=inner.get("side", "yes"),
@@ -194,30 +216,14 @@ class ExecutionManager:
         return status == "executed", unwind_price, oid
 
     async def _unwind_partial_fill(self, execution: ArbExecution):
-        signal = execution.signal
-        filled_legs = []
-        for i, o in enumerate(execution.batch_response):
-            inner = self.api.unwrap_order(o)
-            if inner.get("order_id") in execution.filled:
-                original_action = (
-                    signal.leg_actions[i] if signal.leg_actions and i < len(signal.leg_actions) else "sell"
-                )
-                unwind_action = "sell" if original_action == "buy" else "buy"
-                filled_legs.append((
-                    inner.get("ticker", ""),
-                    float(inner.get("yes_price_dollars", 0)),
-                    int(float(inner.get("fill_count_fp", 0))),
-                    unwind_action,
-                ))
-
         step = self._unwind_price_step_cents / 100.0
 
-        for ticker, fill_price, qty, unwind_action in filled_legs:
-            if qty <= 0:
+        for leg in execution.filled_legs:
+            if leg.quantity <= 0:
                 continue
-            logger.warning("Unwinding %d contracts of %s (filled @ %.2f)", qty, ticker, fill_price)
+            logger.warning("Unwinding %d contracts of %s (filled @ %.2f)", leg.quantity, leg.ticker, leg.fill_price)
             phase2_wait = self._unwind_phase2_secs - self._unwind_phase1_secs
-            if unwind_action == "buy":  # closing a short (original leg was a sell)
+            if leg.unwind_action == "buy":  # closing a short (original leg was a sell)
                 phases = [
                     (lambda fp, s=step: min(fp + s, 0.99), 0),
                     (lambda fp, s=step: min(fp + 2 * s, 0.99), self._unwind_phase1_secs),
@@ -242,28 +248,27 @@ class ExecutionManager:
             for phase_i, (price_fn, wait_secs) in enumerate(phases, 1):
                 if wait_secs > 0:
                     await asyncio.sleep(wait_secs)
-                price = price_fn(fill_price)
+                price = price_fn(leg.fill_price)
                 filled, unwind_price, prev_oid = await self._execute_unwind_phase(
-                    ticker, round(price * 100), qty, prev_oid, unwind_action)
+                    leg.ticker, round(price * 100), leg.quantity, prev_oid, leg.unwind_action)
                 if filled:
-                    logger.info("Unwind phase %d filled for %s @ %.2f", phase_i, ticker, price)
+                    logger.info("Unwind phase %d filled for %s @ %.2f", phase_i, leg.ticker, price)
                     if prev_oid:
-                        self._processed_fill_ids.add(prev_oid)
+                        self._track_fill_id(prev_oid)
                     self.positions.record_fill(
-                        ticker=ticker, side="yes",
-                        price=unwind_price, quantity=qty,
-                        action=unwind_action,
+                        ticker=leg.ticker, side="yes",
+                        price=unwind_price, quantity=leg.quantity,
+                        action=leg.unwind_action,
                     )
                     break
 
-            # loss = what we paid − what we recovered (direction-agnostic)
-            if unwind_action == "buy":
-                self._record_unwind_loss(ticker, fill_price, unwind_price, qty)
+            if leg.unwind_action == "buy":
+                self._record_unwind_loss(leg.ticker, leg.fill_price, unwind_price, leg.quantity)
             else:
-                self._record_unwind_loss(ticker, unwind_price, fill_price, qty)
+                self._record_unwind_loss(leg.ticker, unwind_price, leg.fill_price, leg.quantity)
             if not filled:
-                logger.error("All %d unwind phases exhausted for %s — last order still resting, loss estimated", len(phases), ticker)
-            logger.warning("Unwind complete for %s: final @ $%.2f", ticker, unwind_price)
+                logger.error("All %d unwind phases exhausted for %s — last order still resting, loss estimated", len(phases), leg.ticker)
+            logger.warning("Unwind complete for %s: final @ $%.2f", leg.ticker, unwind_price)
 
     def handle_fill(self, fill_data: dict):
         logger.info("WS fill event: %s", fill_data)
@@ -282,9 +287,7 @@ class ExecutionManager:
             logger.debug("Skipping duplicate WS fill for %s (already processed from batch response)", order_id)
         else:
             if order_id:
-                if len(self._processed_fill_ids) >= 10_000:
-                    self._processed_fill_ids.clear()
-                self._processed_fill_ids.add(order_id)
+                self._track_fill_id(order_id)
             self.positions.record_fill(
                 ticker=ticker,
                 side=side,
