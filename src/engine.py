@@ -102,6 +102,7 @@ class ArbEngine:
         event_ticker: str | None = None,
         min_bid_depth: int | None = None,
         min_volume_24h: float | None = None,
+        strategy: str = "taker",
     ) -> list[tuple[str, float, float]] | None:
         legs: list[tuple[str, float, float]] = []
         for ticker, book in orderbooks.items():
@@ -125,7 +126,7 @@ class ArbEngine:
                         )
                         if self.recorder:
                             self.recorder.record_signal(
-                                event_ticker=event_ticker, strategy="taker", outcome="near_miss",
+                                event_ticker=event_ticker, strategy=strategy, outcome="near_miss",
                                 reject_reason="depth_filter", bid_sum=bid_sum, ask_sum=None,
                                 profit_pct=None, exposure_ratio=None,
                                 legs=[{"ticker": t, "price": p, "depth": d} for t, p, d in legs],
@@ -145,7 +146,7 @@ class ArbEngine:
                         )
                         if self.recorder:
                             self.recorder.record_signal(
-                                event_ticker=event_ticker, strategy="taker", outcome="near_miss",
+                                event_ticker=event_ticker, strategy=strategy, outcome="near_miss",
                                 reject_reason="volume_filter", bid_sum=bid_sum, ask_sum=None,
                                 profit_pct=None, exposure_ratio=None,
                                 legs=[{"ticker": t, "price": p, "depth": d} for t, p, d in legs],
@@ -173,7 +174,7 @@ class ArbEngine:
     ) -> TradeSignal | None:
         legs = self._validate_legs(
             orderbooks, market_metadata, event_ticker=event_ticker,
-            min_volume_24h=self.maker_min_volume_24h,
+            min_volume_24h=self.maker_min_volume_24h, strategy="maker",
         )
         if legs is None:
             return None
@@ -270,6 +271,7 @@ class ArbEngine:
             orderbooks, market_metadata, event_ticker=event_ticker,
             min_bid_depth=self.near_expiry_min_bid_depth,
             min_volume_24h=self.near_expiry_min_volume_24h,
+            strategy="near_expiry",
         )
         if legs is None:
             return None
