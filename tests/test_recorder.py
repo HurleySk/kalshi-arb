@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sqlite3
@@ -234,6 +235,32 @@ def test_start_session_triggers_purge(tmp_path):
     _populate_sessions(rec, num_sessions=2, obs_per_session=10, sig_per_session=5)
 
     rec.start_session({"session": "new"})
+
+    obs_sessions = rec._conn.execute(
+        "SELECT DISTINCT session_id FROM orderbook_snapshots"
+    ).fetchall()
+    assert len(obs_sessions) == 1
+
+    rec.close()
+
+
+def test_cleanup_loop_calls_purge(tmp_path):
+    """cleanup_loop should call purge_old_sessions periodically."""
+    db_path = str(tmp_path / "test.db")
+    rec = DataRecorder(db_path, max_db_size_mb=0, min_sessions=1)
+
+    _populate_sessions(rec, num_sessions=2, obs_per_session=5, sig_per_session=3)
+
+    async def _run():
+        loop_task = asyncio.create_task(rec.cleanup_loop(interval_secs=0.01))
+        await asyncio.sleep(0.1)
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_run())
 
     obs_sessions = rec._conn.execute(
         "SELECT DISTINCT session_id FROM orderbook_snapshots"

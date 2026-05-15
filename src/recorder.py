@@ -10,6 +10,7 @@ All record_* methods silently no-op when the recorder is disabled or no
 session is active.  Writes are committed after each insert for durability.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -251,6 +252,12 @@ class DataRecorder:
                      len(purged_ids), total_obs_deleted, total_sig_deleted,
                      before_mb, after_mb)
         return summary
+
+    async def cleanup_loop(self, interval_secs: int = 1800) -> None:
+        """Periodically purge old sessions to keep DB under size cap."""
+        while True:
+            await asyncio.sleep(interval_secs)
+            self.purge_old_sessions(self._max_db_size_mb, self._min_sessions)
 
     # ------------------------------------------------------------------
     # Record helpers (all guard on _enabled and _session_id)

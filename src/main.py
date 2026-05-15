@@ -491,6 +491,9 @@ class ArbBot:
         if self.cfg.recording_enabled:
             tasks.append(asyncio.create_task(self._snapshot_loop()))
             tasks.append(asyncio.create_task(self._balance_loop()))
+            tasks.append(asyncio.create_task(
+                self.recorder.cleanup_loop(self.cfg.cleanup_interval_secs)
+            ))
 
         shutdown_event = asyncio.Event()
 
