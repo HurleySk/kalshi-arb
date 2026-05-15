@@ -17,6 +17,7 @@ URLS = {
 @dataclass
 class Config:
     mode: str
+    exchange: str
     api_key_id: str
     private_key_path: Path
     rest_base_url: str
@@ -57,10 +58,17 @@ def load_config(path: str) -> Config:
     if mode not in URLS:
         raise ValueError(f"Invalid mode: {mode!r}. Must be 'demo' or 'live'.")
 
-    if mode not in raw["credentials"]:
-        raise ValueError(f"No credentials for mode {mode!r}")
+    exchange = raw.get("exchange", "kalshi")
 
-    creds = raw["credentials"][mode]
+    creds_section = raw["credentials"]
+    if exchange in creds_section and isinstance(creds_section[exchange], dict):
+        if mode not in creds_section[exchange]:
+            raise ValueError(f"No credentials for exchange {exchange!r} mode {mode!r}")
+        creds = creds_section[exchange][mode]
+    elif mode in creds_section:
+        creds = creds_section[mode]
+    else:
+        raise ValueError(f"No credentials for mode {mode!r}")
     for key in ("api_key_id", "private_key_path"):
         if key not in creds:
             raise ValueError(f"Missing credential: {key!r} for mode {mode!r}")
@@ -83,6 +91,7 @@ def load_config(path: str) -> Config:
 
     return Config(
         mode=mode,
+        exchange=exchange,
         api_key_id=creds["api_key_id"],
         private_key_path=Path(creds["private_key_path"]).expanduser(),
         rest_base_url=rest_url,

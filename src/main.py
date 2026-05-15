@@ -12,6 +12,8 @@ from pathlib import Path
 from src.auth import KalshiAuth
 from src.api import KalshiAPI
 from src.config import load_config
+from src.exchanges import create_exchange
+from src.core.orderbook_manager import OrderbookManager as CoreOrderbookManager
 from src.dispatch import Dispatcher
 from src.discovery import EventDiscovery
 from src.engine import ArbEngine
@@ -34,6 +36,13 @@ class ArbBot:
             private_key_path=self.cfg.private_key_path,
         )
         self.api = KalshiAPI(base_url=self.cfg.rest_base_url, auth=self.auth)
+        exchange_config = {
+            "api_key_id": self.cfg.api_key_id,
+            "private_key_path": str(self.cfg.private_key_path),
+            "base_url": self.cfg.rest_base_url,
+            "ws_url": self.cfg.ws_url,
+        }
+        self.exchange = create_exchange(self.cfg.exchange, exchange_config)
         self.orderbook_mgr = OrderbookManager()
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)

@@ -183,6 +183,80 @@ strategy:
     assert cfg.log_max_backup_count == 5
 
 
+def test_exchange_defaults_to_kalshi(tmp_path):
+    """Exchange field should default to 'kalshi' when not specified."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+mode: demo
+credentials:
+  demo:
+    api_key_id: test
+    private_key_path: /tmp/fake.pem
+strategy:
+  risk_mode: conservative
+""")
+    cfg = load_config(str(cfg_file))
+    assert cfg.exchange == "kalshi"
+
+
+def test_exchange_explicit_value(tmp_path):
+    """Exchange field should be read from config when specified."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+mode: demo
+exchange: kalshi
+credentials:
+  demo:
+    api_key_id: test
+    private_key_path: /tmp/fake.pem
+strategy:
+  risk_mode: conservative
+""")
+    cfg = load_config(str(cfg_file))
+    assert cfg.exchange == "kalshi"
+
+
+def test_exchange_nested_credentials(tmp_path):
+    """Nested credentials format (exchange -> mode) should work."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+mode: demo
+exchange: kalshi
+credentials:
+  kalshi:
+    demo:
+      api_key_id: nested-key
+      private_key_path: /tmp/fake.pem
+strategy:
+  risk_mode: conservative
+""")
+    cfg = load_config(str(cfg_file))
+    assert cfg.exchange == "kalshi"
+    assert cfg.api_key_id == "nested-key"
+
+
+def test_exchange_nested_credentials_missing_mode(tmp_path):
+    """Nested credentials missing the mode should raise ValueError."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+mode: live
+exchange: kalshi
+credentials:
+  kalshi:
+    demo:
+      api_key_id: demo-key
+      private_key_path: /tmp/fake.pem
+strategy:
+  risk_mode: conservative
+""")
+    try:
+        load_config(str(cfg_file))
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "kalshi" in str(e)
+        assert "live" in str(e)
+
+
 def test_retention_config_custom(tmp_path):
     """Retention config should read custom values from yaml."""
     cfg_file = tmp_path / "config.yaml"
