@@ -79,6 +79,7 @@ class ArbEngine:
             upper_ticker, upper_book,
             lower_ticker, lower_book,
             self.fee_model,
+            min_profit_pct=self.risk_profile.min_profit_pct,
         )
 
     def evaluate_maker(
