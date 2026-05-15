@@ -261,6 +261,9 @@ class ArbBot:
             self.dispatcher.mark_execution_complete(signal.event_ticker)
 
     async def _emergency_shutdown(self):
+        if getattr(self, '_shutting_down', False):
+            return
+        self._shutting_down = True
         logger.critical(
             "CIRCUIT BREAKER TRIPPED — session loss: $%.4f. Cancelling all orders and closing positions.",
             self.executor.session_realized_loss,

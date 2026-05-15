@@ -182,6 +182,45 @@ def test_emergency_shutdown_cancel_failure_doesnt_block_close():
     bot.api.batch_create_orders.assert_called_once()
 
 
+def test_emergency_shutdown_does_not_hang():
+    """Emergency shutdown must complete even if API calls hang."""
+    bot = _make_bot()
+    bot.executor.session_realized_loss = 1.0
+    bot.maker = None
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(999)
+
+    bot.api.get_open_orders = AsyncMock(side_effect=_hang)
+    bot.api.get_positions = AsyncMock(side_effect=_hang)
+    bot.api.batch_cancel_orders = AsyncMock(side_effect=_hang)
+    bot.api.batch_create_orders = AsyncMock(side_effect=_hang)
+
+    async def _run():
+        try:
+            await asyncio.wait_for(bot._emergency_shutdown(), timeout=70)
+        except asyncio.TimeoutError:
+            raise AssertionError("_emergency_shutdown hung — no overall timeout")
+
+    asyncio.run(_run())
+
+
+def test_emergency_shutdown_idempotent():
+    """Second call to _emergency_shutdown should be a no-op."""
+    bot = _make_bot()
+    bot.executor.session_realized_loss = 1.0
+    bot.maker = None
+    bot.api.get_open_orders = AsyncMock(return_value={"orders": []})
+    bot.api.get_positions = AsyncMock(return_value={"market_positions": []})
+
+    async def _run():
+        await bot._emergency_shutdown()
+        await bot._emergency_shutdown()
+
+    asyncio.run(_run())
+    assert bot.api.get_open_orders.call_count == 1
+
+
 def test_cleanup_expired_events():
     """Expired events should be removed from orderbook manager and metadata."""
     bot = _make_bot()
