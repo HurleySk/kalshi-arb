@@ -12,6 +12,7 @@ Use these MCP tools to gather data:
 - `mcp__kalshi-arb__get_performance_report` — strategy breakdown, rejection funnel, fill rates
 - `mcp__kalshi-arb__get_positions` — current open positions
 - `mcp__kalshi-arb__get_near_misses` — signals that nearly fired
+- `mcp__kalshi-arb__get_signal_history` — drill into specific events, filter by strategy/outcome
 - `mcp__kalshi-arb__get_risk_profile` — active risk parameters
 
 ## Workflow
@@ -32,7 +33,11 @@ Call `mcp__kalshi-arb__get_near_misses` with the same lookback period.
 
 Call `mcp__kalshi-arb__get_risk_profile` to understand active thresholds.
 
-### Step 5: Anomaly detection
+### Step 5: Drill into signal history
+
+Call `mcp__kalshi-arb__get_signal_history` with outcome="fire" to see what actually traded. Then call with outcome="near_miss" and limit=10 to see the best missed opportunities. For any anomalous events, call with specific strategy filters to understand the pattern.
+
+### Step 6: Anomaly detection
 
 Compare this session's metrics against baseline expectations:
 
@@ -48,7 +53,7 @@ Compare this session's metrics against baseline expectations:
 - Near-miss count < fire count → thresholds are well-calibrated
 - Balance increased over the session → profitable
 
-### Step 6: Write assessment
+### Step 7: Write assessment
 
 Produce a structured report:
 

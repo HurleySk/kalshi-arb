@@ -113,11 +113,13 @@ grep "coverage-filtered" /tmp/live_test.log | sort | uniq -c | sort -rn | head -
 ```
 High coverage-filtered counts are healthy — means the guards are working. Review any event that fired an arb to ensure it wasn't a false positive.
 
-**5c. Check near-miss signals**
-```bash
-grep "near-miss" /tmp/live_test.log | tail -20
-```
-Near-misses close to $1.00 (bid_sum ≥ 0.97 for taker, ≥ 0.95 for maker) indicate markets approaching profitability.
+**5c. Check near-miss signals (from analytics DB)**
+
+Call `mcp__kalshi-arb__get_near_misses` with days=1. This is more reliable than grep since the recorder captures all near-misses regardless of log level.
+
+Also call `mcp__kalshi-arb__get_signal_history` with outcome="near_miss" and limit=10 to see the highest-value misses.
+
+Near-misses close to $1.00 (bid_sum >= 0.97 for taker, >= 0.95 for maker) indicate markets approaching profitability.
 
 **5d. Check for errors**
 ```bash
