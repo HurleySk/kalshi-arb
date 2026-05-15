@@ -177,10 +177,14 @@ class ArbBot:
             return True
         for ticker in tickers:
             try:
-                resp = await self.api.get_market_trades(ticker)
+                resp = await asyncio.wait_for(
+                    self.api.get_market_trades(ticker), timeout=10)
                 if not resp.get("trades"):
                     logger.info("No recent trades for %s, skipping arb", ticker)
                     return False
+            except asyncio.TimeoutError:
+                logger.warning("Recent trades check timed out for %s — treating as no trades", ticker)
+                return False
             except Exception:
                 logger.exception("Failed to check recent trades for %s", ticker)
                 return False
@@ -261,38 +265,45 @@ class ArbBot:
             "CIRCUIT BREAKER TRIPPED — session loss: $%.4f. Cancelling all orders and closing positions.",
             self.executor.session_realized_loss,
         )
+        try:
+            await asyncio.wait_for(self._emergency_shutdown_inner(), timeout=60)
+        except asyncio.TimeoutError:
+            logger.critical("Emergency shutdown timed out after 60s — manual intervention required")
+
+    async def _emergency_shutdown_inner(self):
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 if self.maker:
-                    await self.maker.cancel_all()
-            except Exception:
+                    await asyncio.wait_for(self.maker.cancel_all(), timeout=15)
+            except (asyncio.TimeoutError, Exception):
                 logger.warning("Failed to cancel maker orders (attempt %d)", attempt + 1)
 
             try:
-                orders_resp = await self.api.get_open_orders()
+                orders_resp = await asyncio.wait_for(self.api.get_open_orders(), timeout=15)
                 resting = [o for o in orders_resp.get("orders", [])
                            if o.get("status") in ("resting", "pending", "open")]
                 if resting:
-                    await self.api.batch_cancel_orders([o["order_id"] for o in resting])
+                    await asyncio.wait_for(
+                        self.api.batch_cancel_orders([o["order_id"] for o in resting]), timeout=15)
                     logger.info("Cancelled %d open orders", len(resting))
-            except Exception:
+            except (asyncio.TimeoutError, Exception):
                 logger.warning("Failed to cancel open orders (attempt %d)", attempt + 1)
 
             try:
-                positions_resp = await self.api.get_positions()
+                positions_resp = await asyncio.wait_for(self.api.get_positions(), timeout=15)
                 close_orders = []
                 for mp in positions_resp.get("market_positions", []):
                     qty = int(float(mp.get("position_fp", "0")))
                     if qty != 0:
                         close_orders.append(self.api.build_close_order(mp["ticker"], qty))
                 if close_orders:
-                    await self.api.batch_create_orders(close_orders)
+                    await asyncio.wait_for(self.api.batch_create_orders(close_orders), timeout=15)
                     logger.info("Sent %d close orders", len(close_orders))
                 else:
                     logger.info("No positions to close")
                 return
-            except Exception:
+            except (asyncio.TimeoutError, Exception):
                 if attempt == max_retries - 1:
                     logger.critical(
                         "Emergency shutdown failed after %d attempts — manual intervention required",
@@ -355,6 +366,12 @@ class ArbBot:
 
     async def _boot_reconcile(self):
         """Cancel orphaned resting orders, load longs, close shorts."""
+        try:
+            await asyncio.wait_for(self._boot_reconcile_inner(), timeout=60)
+        except asyncio.TimeoutError:
+            logger.warning("Boot reconciliation timed out after 60s — proceeding without full reconcile")
+
+    async def _boot_reconcile_inner(self):
         try:
             orders_resp = await self.api.get_open_orders()
             resting = [
