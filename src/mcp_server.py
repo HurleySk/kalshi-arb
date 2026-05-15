@@ -6,8 +6,8 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from src.config import load_config
-from src.auth import KalshiAuth
-from src.api import KalshiAPI
+from src.exchanges.kalshi.auth import KalshiAuth
+from src.exchanges.kalshi.api import KalshiAPI
 
 logger = logging.getLogger(__name__)
 

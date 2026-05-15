@@ -2,7 +2,8 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from src.models import Orderbook, TradeSignal
+from src.core.models import Orderbook, TradeSignal
+from src.exchanges.kalshi.discovery import EventDiscovery
 
 
 def _make_bot():
@@ -34,11 +35,16 @@ def _make_bot():
         cfg.recording_balance_poll_interval_secs = 300
         mock_cfg.return_value = cfg
 
-        with patch("src.main.KalshiAuth"):
-            with patch("src.main.KalshiAPI"):
-                with patch("src.main.MarketScanner"):
-                    with patch("src.main.create_exchange"):
-                        return ArbBot("fake.yaml")
+        with patch("src.main.create_exchange") as mock_create_exchange:
+            mock_exchange = MagicMock()
+            mock_exchange.api = MagicMock()
+            mock_exchange.fee_model = MagicMock()
+            mock_exchange.order_builder = MagicMock()
+            mock_exchange.constraints = MagicMock()
+            mock_exchange.create_feed = MagicMock(return_value=MagicMock())
+            mock_exchange.create_discovery = MagicMock(return_value=MagicMock())
+            mock_create_exchange.return_value = mock_exchange
+            return ArbBot("fake.yaml")
 
 
 def _setup_boot_reconcile(bot, *, open_orders=None, positions=None):
@@ -120,9 +126,9 @@ def test_pending_execution_prevents_duplicate():
     bot.executor.is_circuit_breaker_tripped = MagicMock(return_value=False)
 
     bot.orderbook_mgr.register_event("E1", ["M1", "M2", "M3"])
-    bot.orderbook_mgr.apply_snapshot("M1", {"yes_dollars_fp": [["0.4000", "100"]], "no_dollars_fp": []})
-    bot.orderbook_mgr.apply_snapshot("M2", {"yes_dollars_fp": [["0.3500", "100"]], "no_dollars_fp": []})
-    bot.orderbook_mgr.apply_snapshot("M3", {"yes_dollars_fp": [["0.3500", "100"]], "no_dollars_fp": []})
+    bot.orderbook_mgr.apply_snapshot("M1", {"bids": {40: 100}, "asks": {}})
+    bot.orderbook_mgr.apply_snapshot("M2", {"bids": {35: 100}, "asks": {}})
+    bot.orderbook_mgr.apply_snapshot("M3", {"bids": {35: 100}, "asks": {}})
 
     # Simulate: event already pending execution
     bot.dispatcher._pending_execution.add("E1")
@@ -241,6 +247,10 @@ def test_cleanup_expired_events():
 
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     future = (datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Replace mock discovery with a real EventDiscovery backed by the bot's orderbook manager.
+    discovery = EventDiscovery(api=MagicMock(), orderbook_mgr=bot.orderbook_mgr, scanner=MagicMock())
+    bot.discovery = discovery
 
     bot.discovery.event_tickers = {"E_EXPIRED", "E_ACTIVE"}
     bot.orderbook_mgr.register_event("E_EXPIRED", ["M_EXP1", "M_EXP2"])
