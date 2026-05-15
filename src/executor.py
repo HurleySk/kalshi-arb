@@ -285,6 +285,8 @@ class ExecutionManager:
         status = inner.get("status", "")
         unwind_price = float(inner.get("yes_price_dollars", 0))
         oid = inner.get("order_id", "")
+        if oid:
+            self._track_fill_id(oid)
         return status == "executed", unwind_price, oid
 
     def _launch_unwind(self, execution: ArbExecution):
@@ -371,8 +373,6 @@ class ExecutionManager:
                     continue
                 if filled:
                     logger.info("Unwind phase %d filled for %s @ %.2f", phase_i, leg.ticker, price)
-                    if prev_oid:
-                        self._track_fill_id(prev_oid)
                     self.positions.record_fill(
                         ticker=leg.ticker, side="yes",
                         price=unwind_price, quantity=leg.quantity,

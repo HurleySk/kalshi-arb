@@ -69,6 +69,7 @@ class ArbBot:
             fill_mode=self.cfg.maker_fill_mode,
             max_events=self.cfg.max_maker_events,
             risk_profile=self.risk_profile,
+            track_fill_id=self.executor._track_fill_id,
         ) if self.cfg.maker_enabled else None
         self.two_sided = TwoSidedManager(
             api=self.api,

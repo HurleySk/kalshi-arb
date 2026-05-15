@@ -136,3 +136,52 @@ def test_asymmetric_fill_rejected_conservative():
     }
     signal = engine.evaluate("E1", orderbooks, market_metadata=meta)
     assert signal is None, "Should reject: underdog depth 1 < conservative min 5"
+
+
+def test_unwind_order_id_tracked_prevents_ws_double_count():
+    """Unwind sell must track its order ID so WS fill doesn't double-count it."""
+    executor, api, positions = _partial_fill_executor()
+    signal = TradeSignal(
+        event_ticker="KXDOTA2MAP-26MAY15",
+        legs=[("FLC", 0.79), ("LIQUID", 0.16)],
+        net_profit=0.029, profit_pct=2.9, exposure_ratio=0.0,
+        signal_type="buy_side_taker",
+        leg_actions=["buy", "buy"],
+    )
+
+    api.batch_create_orders = AsyncMock(side_effect=[
+        {"orders": [
+            {"order": {"order_id": "o1", "ticker": "FLC", "status": "resting",
+                       "yes_price_dollars": "0.79", "fill_count_fp": "0.00",
+                       "action": "buy", "side": "yes", "initial_count_fp": "1.00"}},
+            {"order": {"order_id": "o2", "ticker": "LIQUID", "status": "executed",
+                       "yes_price_dollars": "0.16", "fill_count_fp": "1.00",
+                       "action": "buy", "side": "yes", "initial_count_fp": "1.00"}},
+        ]},
+        {"orders": [
+            {"order": {"order_id": "unwind-o1", "ticker": "LIQUID", "status": "executed",
+                       "yes_price_dollars": "0.10", "fill_count_fp": "1.00",
+                       "action": "sell", "side": "yes", "initial_count_fp": "1.00"}},
+        ]},
+    ])
+
+    async def _run():
+        await executor.execute(signal, quantity=1)
+        await asyncio.sleep(0.1)
+
+    asyncio.run(_run())
+
+    assert "unwind-o1" in executor._processed_fill_ids, \
+        "Unwind order ID must be tracked to prevent WS fill double-count"
+
+    executor.handle_fill({
+        "order_id": "unwind-o1",
+        "market_ticker": "LIQUID",
+        "yes_price_dollars": "0.10",
+        "count_fp": "1.00",
+        "action": "sell",
+        "side": "yes",
+    })
+
+    pos = positions.get_position("LIQUID")
+    assert pos is None, "Position should be fully closed, not a phantom short"

@@ -15,6 +15,7 @@ class TwoSidedManager:
         self._max_inventory = risk_profile.two_sided_max_inventory
         # ticker → {buy_id, sell_id, filled_side, quantity, posted_at}
         self._positions: dict[str, dict] = {}
+        self._unwind_order_ids: set[str] = set()
 
     @property
     def total_inventory(self) -> int:
@@ -55,6 +56,8 @@ class TwoSidedManager:
         return True
 
     def owns_order(self, order_id: str) -> bool:
+        if order_id in self._unwind_order_ids:
+            return True
         for pos in self._positions.values():
             if pos["buy_id"] == order_id or pos["sell_id"] == order_id:
                 return True
@@ -78,12 +81,18 @@ class TwoSidedManager:
     async def _unwind_long(self, ticker: str, bought_at: float, quantity: int):
         price = round(min(0.99, bought_at + 0.01), 2)
         order = self.api.build_sell_order(ticker=ticker, yes_price=price, quantity=quantity)
-        await self.api.batch_create_orders([order])
+        resp = await self.api.batch_create_orders([order])
+        oid = self.api.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
+        if oid:
+            self._unwind_order_ids.add(oid)
 
     async def _unwind_short(self, ticker: str, sold_at: float, quantity: int):
         price = round(max(0.01, sold_at - 0.01), 2)
         order = self.api.build_buy_order(ticker=ticker, yes_price=price, quantity=quantity)
-        await self.api.batch_create_orders([order])
+        resp = await self.api.batch_create_orders([order])
+        oid = self.api.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
+        if oid:
+            self._unwind_order_ids.add(oid)
 
     async def _check_timeouts(self):
         now = time.time()

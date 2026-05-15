@@ -31,8 +31,9 @@ class MakerManager:
     def __init__(self, api: KalshiAPI, fill_mode: str = "cancel_and_take",
                  max_events: int = 3, risk_profile=None,
                  tighten_phase1_secs: int = 15, tighten_phase2_secs: int = 30,
-                 tighten_step_cents: int = 3):
+                 tighten_step_cents: int = 3, track_fill_id=None):
         self.api = api
+        self._track_fill_id = track_fill_id or (lambda oid: None)
         if fill_mode not in self.VALID_FILL_MODES:
             logger.warning("Unknown fill_mode %r, falling back to cancel_and_take", fill_mode)
             fill_mode = "cancel_and_take"
@@ -218,7 +219,11 @@ class MakerManager:
                 self.api.build_sell_order(ticker=t, yes_price=p, quantity=1)
                 for t, p in unfilled_tickers
             ]
-            await self.api.batch_create_orders(taker_orders)
+            resp = await self.api.batch_create_orders(taker_orders)
+            for o in resp.get("orders", []):
+                oid = self.api.unwrap_order(o).get("order_id", "")
+                if oid:
+                    self._track_fill_id(oid)
             logger.info("Placed taker orders for %d remaining legs on %s",
                          len(taker_orders), event_ticker)
 
@@ -237,6 +242,8 @@ class MakerManager:
             resp = await self.api.batch_create_orders(new_order)
             inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
             new_oid = inner.get("order_id", "")
+            if new_oid:
+                self._track_fill_id(new_oid)
             if inner.get("status") == "executed":
                 event.filled[new_oid] = float(inner.get("yes_price_dollars", 0))
                 logger.info("Tighten phase %d filled for %s @ %.2f", phase, ticker, new_price)
@@ -315,6 +322,7 @@ class MakerManager:
                     new_inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
                     new_oid = new_inner.get("order_id", "")
                     if new_oid:
+                        self._track_fill_id(new_oid)
                         self._order_to_event.pop(oid, None)
                         self._order_to_event[new_oid] = event_ticker
                         event.order_ids[ticker] = new_oid
