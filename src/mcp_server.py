@@ -112,8 +112,8 @@ async def close_position(ticker: str) -> str:
         from src.core.reservation_store import ReservationStore
         store = ReservationStore(path="data/reservations.json")
         if store.is_reserved(ticker):
-            reserved_qty = store.get_reserved_quantity(ticker, "yes")
-            return (f"WARNING: {ticker} is reserved ({reserved_qty}x). "
+            res = [r for r in store.list_all() if r.ticker == ticker][0]
+            return (f"WARNING: {ticker} is reserved ({res.quantity}x {res.side}). "
                     f"Use release_position first if you want to close it.")
 
         qty = int(float(target.get("position_fp", "0")))
