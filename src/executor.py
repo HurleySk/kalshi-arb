@@ -311,7 +311,7 @@ class ExecutionManager:
                 logger.exception("Sequential leg %d timed out for %s — aborting", idx, signal.event_ticker)
                 break
 
-            inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
+            inner = self.order_builder.unwrap_order(resp.get("orders", [{}])[0])
             oid = inner.get("order_id", "")
             status = inner.get("status", "")
 

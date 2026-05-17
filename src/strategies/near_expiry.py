@@ -31,6 +31,17 @@ def evaluate(
     for ticker, price, depth in legs:
         if depth < risk_profile.near_expiry_min_bid_depth:
             return None
+
+    if risk_profile.min_ask_depth >= 1:
+        for ticker, _, _ in legs:
+            book = orderbooks[ticker]
+            best_ask = book.best_ask()
+            if best_ask is None:
+                return None
+            if book.ask_depth_at(best_ask) < risk_profile.min_ask_depth:
+                return None
+
+    for ticker, price, depth in legs:
         meta = market_metadata.get(ticker, {})
         vol = meta.get("volume_24h", 0)
         if vol < risk_profile.near_expiry_min_volume_24h:

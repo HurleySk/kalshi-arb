@@ -116,22 +116,32 @@ CREATE INDEX IF NOT EXISTS idx_obs_ts      ON orderbook_snapshots(ts);
 
 
 class DataRecorder:
-    """SQLite-backed recorder.  Pass db_path=None for a disabled no-op instance."""
+    """SQLite-backed recorder.
+
+    Two modes:
+    - session_dir mode: each session creates a new DB file in the directory.
+      Cleanup is instant (rm old files). Pass session_dir="/path/to/dir".
+    - legacy mode: single DB file. Pass db_path="/path/to/file.db".
+    - disabled: pass both as None.
+    """
 
     def __init__(
         self,
-        db_path: str | None,
+        db_path: str | None = None,
         max_db_size_mb: int = 5000,
-        min_sessions: int = 1,
+        session_dir: str | None = None,
     ) -> None:
-        self._enabled = db_path is not None
+        self._session_dir = session_dir
+        self._enabled = db_path is not None or session_dir is not None
         self._session_id: int | None = None
         self._conn: sqlite3.Connection | None = None
-        self._db_path: str | None = db_path if self._enabled else None
-        self._max_db_size_mb = max_db_size_mb
-        self._min_sessions = min_sessions
+        self._db_path: str | None = None
+        self._max_total_size_mb = max_db_size_mb
 
-        if self._enabled:
+        if session_dir:
+            Path(session_dir).mkdir(parents=True, exist_ok=True)
+        elif db_path and self._enabled:
+            self._db_path = db_path
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(db_path, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -164,8 +174,17 @@ class DataRecorder:
         """Open a new recording session.  Returns session id, or None if disabled."""
         if not self._enabled:
             return None
+
+        if self._session_dir:
+            ts = time.time()
+            db_file = Path(self._session_dir) / f"session_{ts:.6f}.db"
+            self._db_path = str(db_file)
+            self._conn = sqlite3.connect(str(db_file), check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._init_schema()
+
         assert self._conn is not None
-        self.purge_old_sessions(self._max_db_size_mb, self._min_sessions)
         cur = self._conn.execute(
             "INSERT INTO sessions (start_time, end_time, config_json) VALUES (?, NULL, ?)",
             (time.time(), json.dumps(config)),
@@ -190,83 +209,58 @@ class DataRecorder:
     # Retention
     # ------------------------------------------------------------------
 
-    def purge_old_sessions(self, max_db_size_mb: int, min_sessions: int) -> dict | None:
-        """Delete snapshots and signals from oldest sessions until DB is under size cap.
-
-        Returns summary dict if anything was purged, None otherwise.
-        Executions, fills, balances, and session rows are never deleted.
-        """
-        if not self._enabled or self._conn is None or self._db_path is None:
+    def cleanup_old_files(self) -> dict | None:
+        """Delete oldest session files until total size is under cap. Instant via os.unlink."""
+        if not self._session_dir:
             return None
 
-        db_size_bytes = os.path.getsize(self._db_path)
-        cap_bytes = max_db_size_mb * 1024 * 1024
-        if db_size_bytes <= cap_bytes:
+        import glob as _glob
+        pattern = str(Path(self._session_dir) / "session_*.db*")
+        files = sorted(_glob.glob(pattern))
+
+        total_bytes = sum(os.path.getsize(f) for f in files)
+        cap_bytes = self._max_total_size_mb * 1024 * 1024
+        if total_bytes <= cap_bytes:
             return None
 
-        before_mb = db_size_bytes / (1024 * 1024)
+        before_mb = total_bytes / (1024 * 1024)
+        deleted_files: list[str] = []
+        current = str(self._db_path) if self._db_path else ""
 
-        sessions = self._conn.execute(
-            "SELECT id FROM sessions ORDER BY start_time ASC"
-        ).fetchall()
-        total_sessions = len(sessions)
+        session_groups: dict[str, list[str]] = {}
+        for f in files:
+            base = f.split("-wal")[0].split("-shm")[0]
+            session_groups.setdefault(base, []).append(f)
 
-        purged_ids: list[int] = []
-        total_obs_deleted = 0
-        total_sig_deleted = 0
-
-        for (sid,) in sessions:
-            if total_sessions - len(purged_ids) <= min_sessions:
+        for base in sorted(session_groups.keys()):
+            if total_bytes <= cap_bytes:
                 break
-            if os.path.getsize(self._db_path) <= cap_bytes:
-                break
+            if base == current or base == current.split("-wal")[0]:
+                continue
+            for f in session_groups[base]:
+                sz = os.path.getsize(f)
+                os.unlink(f)
+                total_bytes -= sz
+                deleted_files.append(f)
 
-            obs_deleted = self._conn.execute(
-                "DELETE FROM orderbook_snapshots WHERE session_id = ?", (sid,)
-            ).rowcount
-            sig_deleted = self._conn.execute(
-                "DELETE FROM signal_evaluations WHERE session_id = ?", (sid,)
-            ).rowcount
-            self._conn.commit()
-            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-
-            purged_ids.append(sid)
-            total_obs_deleted += obs_deleted
-            total_sig_deleted += sig_deleted
-
-        if not purged_ids:
+        if not deleted_files:
             return None
 
-        self._conn.execute("VACUUM")
-        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-
-        after_mb = os.path.getsize(self._db_path) / (1024 * 1024)
-
-        summary = {
-            "sessions_purged": purged_ids,
-            "obs_deleted": total_obs_deleted,
-            "sig_deleted": total_sig_deleted,
-            "before_mb": round(before_mb, 1),
-            "after_mb": round(after_mb, 1),
-        }
-        logger.info("DB cleanup: purged %d session(s) — %d snapshots, %d signals removed. "
-                     "Size: %.1f MB → %.1f MB",
-                     len(purged_ids), total_obs_deleted, total_sig_deleted,
-                     before_mb, after_mb)
-        return summary
+        after_mb = total_bytes / (1024 * 1024)
+        logger.info("Session cleanup: deleted %d file(s). Size: %.1f MB → %.1f MB",
+                     len(deleted_files), before_mb, after_mb)
+        return {"deleted": deleted_files, "before_mb": round(before_mb, 1), "after_mb": round(after_mb, 1)}
 
     async def cleanup_loop(self, interval_secs: float = 1800) -> None:
-        """Periodically purge old sessions to keep DB under size cap."""
+        """Periodically clean up old session files."""
         while True:
             await asyncio.sleep(interval_secs)
             try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(
-                    None, self.purge_old_sessions,
-                    self._max_db_size_mb, self._min_sessions,
-                )
+                if self._session_dir:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, self.cleanup_old_files)
             except Exception:
-                logger.exception("DB cleanup failed, will retry next cycle")
+                logger.exception("Session cleanup failed, will retry next cycle")
 
     # ------------------------------------------------------------------
     # Record helpers (all guard on _enabled and _session_id)

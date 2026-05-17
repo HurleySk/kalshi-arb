@@ -118,15 +118,16 @@ Individual overrides in `config.yaml` take precedence over preset values.
 - `two_sided_min_volume_24h` — volume floor for two-sided candidates
 - `maker_min_volume_24h` — separate volume floor for maker strategy (lower than taker since makers create liquidity; conservative=10, moderate/aggressive=0)
 
-### Key filtering pipeline in `ArbEngine.evaluate()` (via `strategies/taker.evaluate_sell_side`)
+### Key filtering pipeline in `strategies/taker.evaluate_sell_side()`
 
 1. All markets must have a best bid
 2. `min_bid_depth` check (from risk profile)
-3. `min_volume_24h` check — rejects legs with insufficient 24h trading volume
-4. `arb_profit(bid_prices, fee_model) > 0` (sum of bids > $1 + fees per exchange fee model)
-5. Time-horizon check: events within `near_term_hours` (24h) use flat `min_profit_pct`; longer-dated must beat `hurdle_rate_annual_pct` annualized
-6. `exposure_ratio <= max_exposure_ratio` (worst-case loss / net premium)
-7. Async `_validate_recent_trades` — when enabled, verifies each leg has recent trade activity before execution
+3. `min_ask_depth` check — rejects one-sided markets (bids only, no asks) as likely stale/phantom
+4. `min_volume_24h` check — rejects legs with insufficient 24h trading volume
+5. `arb_profit(bid_prices, fee_model) > 0` (sum of bids > $1 + fees per exchange fee model)
+6. `min_profit_pct` check — signal must exceed minimum profit threshold
+7. `exposure_ratio <= max_exposure_ratio` (worst-case loss / net premium)
+8. Async `_validate_recent_trades` — when enabled, verifies each leg has recent trade activity before execution
 
 ### Partial Fill Protection
 

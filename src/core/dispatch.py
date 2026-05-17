@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class Dispatcher:
-    STALE_THRESHOLD_SECS = 5.0
+    STALE_THRESHOLD_SECS = 2.0
 
     def __init__(
         self,

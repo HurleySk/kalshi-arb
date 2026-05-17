@@ -13,6 +13,7 @@ class RiskProfile:
     unwind_phase1_secs: int
     unwind_phase2_secs: int
     unwind_price_step_cents: int
+    min_ask_depth: int = 1
     min_open_interest: float = 0.0
     min_liquidity: float = 0.0
     enable_buy_side_arb: bool = False
@@ -27,12 +28,14 @@ class RiskProfile:
     buy_side_max_horizon_hours: float = 0.0  # 0 = disabled
     min_buy_side_coverage: float = 0.0  # 0 = disabled; rejects ask_sum below this floor
     maker_min_volume_24h: float = 0.0  # separate volume floor for maker (lower since makers create liquidity)
+    sequential_execution: bool = True
 
 
 PRESETS: dict[str, dict] = {
     "conservative": {
         "min_volume_24h": 50.0,
         "min_bid_depth": 5,
+        "min_ask_depth": 5,
         "min_profit_pct": 2.0,
         "require_recent_trades": True,
         "max_exposure_ratio": 2.0,
@@ -41,22 +44,24 @@ PRESETS: dict[str, dict] = {
         "unwind_phase1_secs": 15,
         "unwind_phase2_secs": 30,
         "unwind_price_step_cents": 3,
-        "enable_buy_side_arb": True,
+        "enable_buy_side_arb": False,
         "near_expiry_window_minutes": 30,
         "near_expiry_min_profit_pct": 1.0,
         "near_expiry_min_bid_depth": 1,
         "near_expiry_min_volume_24h": 0.0,
         "two_sided_min_spread_cents": 6,
-        "two_sided_max_inventory": 10,
+        "two_sided_max_inventory": 0,
         "two_sided_timeout_secs": 120,
         "two_sided_min_volume_24h": 50.0,
         "buy_side_max_horizon_hours": 336.0,  # 14 days
         "min_buy_side_coverage": 0.90,
         "maker_min_volume_24h": 10.0,
+        "sequential_execution": True,
     },
     "moderate": {
         "min_volume_24h": 10.0,
         "min_bid_depth": 2,
+        "min_ask_depth": 2,
         "min_profit_pct": 1.0,
         "require_recent_trades": True,
         "max_exposure_ratio": 3.0,
@@ -65,22 +70,24 @@ PRESETS: dict[str, dict] = {
         "unwind_phase1_secs": 30,
         "unwind_phase2_secs": 60,
         "unwind_price_step_cents": 5,
-        "enable_buy_side_arb": True,
+        "enable_buy_side_arb": False,
         "near_expiry_window_minutes": 60,
         "near_expiry_min_profit_pct": 0.5,
         "near_expiry_min_bid_depth": 1,
         "near_expiry_min_volume_24h": 0.0,
         "two_sided_min_spread_cents": 4,
-        "two_sided_max_inventory": 25,
+        "two_sided_max_inventory": 0,
         "two_sided_timeout_secs": 180,
         "two_sided_min_volume_24h": 10.0,
         "buy_side_max_horizon_hours": 720.0,  # 30 days
         "min_buy_side_coverage": 0.88,
         "maker_min_volume_24h": 0.0,
+        "sequential_execution": True,
     },
     "aggressive": {
         "min_volume_24h": 0.0,
         "min_bid_depth": 1,
+        "min_ask_depth": 1,
         "min_profit_pct": 0.5,
         "require_recent_trades": False,
         "max_exposure_ratio": 5.0,
@@ -89,18 +96,19 @@ PRESETS: dict[str, dict] = {
         "unwind_phase1_secs": 45,
         "unwind_phase2_secs": 90,
         "unwind_price_step_cents": 8,
-        "enable_buy_side_arb": True,
+        "enable_buy_side_arb": False,
         "near_expiry_window_minutes": 120,
         "near_expiry_min_profit_pct": 0.3,
         "near_expiry_min_bid_depth": 1,
         "near_expiry_min_volume_24h": 0.0,
         "two_sided_min_spread_cents": 2,
-        "two_sided_max_inventory": 50,
+        "two_sided_max_inventory": 0,
         "two_sided_timeout_secs": 300,
         "two_sided_min_volume_24h": 0.0,
         "buy_side_max_horizon_hours": 0.0,  # unlimited
         "min_buy_side_coverage": 0.85,
         "maker_min_volume_24h": 0.0,
+        "sequential_execution": True,
     },
 }
 

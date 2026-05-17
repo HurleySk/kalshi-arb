@@ -950,7 +950,7 @@ def test_core_engine_two_sided_signal():
     from src.exchanges.kalshi.fee_model import KalshiFeeModel
 
     fm = KalshiFeeModel()
-    rp = load_risk_profile("aggressive", {})
+    rp = load_risk_profile("aggressive", {"two_sided_max_inventory": 50})
     engine = CoreEngine(fee_model=fm, risk_profile=rp)
     # Wide spread: bid=40, ask=50 → spread=10¢, aggressive min=2+2=4
     book = CoreOB(bids={40: 10.0}, asks={50: 10.0})

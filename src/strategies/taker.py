@@ -39,6 +39,28 @@ def evaluate_sell_side(
                 logger.debug("near-miss %s: bid_sum=%.4f blocked — %s depth %.0f < min %d",
                              event_ticker, bid_sum, ticker, depth, risk_profile.min_bid_depth)
             return None
+
+    if risk_profile.min_ask_depth >= 1:
+        for ticker, _, _ in legs:
+            book = orderbooks[ticker]
+            best_ask = book.best_ask()
+            if best_ask is None:
+                if near_miss:
+                    logger.debug(
+                        "near-miss %s: bid_sum=%.4f blocked — %s no ask (one-sided market)",
+                        event_ticker, bid_sum, ticker,
+                    )
+                return None
+            ask_depth = book.ask_depth_at(best_ask)
+            if ask_depth < risk_profile.min_ask_depth:
+                if near_miss:
+                    logger.debug(
+                        "near-miss %s: bid_sum=%.4f blocked — %s ask_depth %.0f < min %d",
+                        event_ticker, bid_sum, ticker, ask_depth, risk_profile.min_ask_depth,
+                    )
+                return None
+
+    for ticker, price, depth in legs:
         meta = market_metadata.get(ticker, {})
         vol = meta.get("volume_24h", 0)
         if vol < risk_profile.min_volume_24h:
