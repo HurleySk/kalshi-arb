@@ -20,9 +20,7 @@ def make_scanner(orderbook_mgr=None, on_update=None, on_fill=None):
 
 def test_subscribe_tracks_tickers():
     scanner = make_scanner()
-    asyncio.get_event_loop().run_until_complete(
-        scanner.subscribe(["PI-100-1", "PI-100-2"])
-    )
+    asyncio.run(scanner.subscribe(["PI-100-1", "PI-100-2"]))
     assert "PI-100-1" in scanner._subscribed_tickers
     assert "PI-100-2" in scanner._subscribed_tickers
 
