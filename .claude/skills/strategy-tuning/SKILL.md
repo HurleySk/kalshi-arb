@@ -10,7 +10,7 @@ You are an expert at tuning Kalshi arb bot parameters using evidence from record
 
 The bot records all signal evaluations, executions, fills, and orderbook snapshots to a SQLite database. The MCP tools `get_performance_report`, `get_parameter_sensitivity`, `get_near_misses`, and `get_replay_comparison` expose this data.
 
-Key parameters and their risk profile defaults are documented in `src/risk.py`.
+Key parameters and their risk profile defaults are documented in `src/core/risk.py`.
 
 ## Workflow
 

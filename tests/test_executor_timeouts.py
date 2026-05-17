@@ -13,15 +13,6 @@ def _make_executor(batch_create_side_effect=None, get_balance_side_effect=None):
         "unwind_phase2_secs": 0,
     })
     api = MagicMock()
-    api.unwrap_order = lambda raw: raw.get("order", raw)
-    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
-        "ticker": ticker, "action": "sell", "side": "yes",
-        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
-    })
-    api.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
-        "ticker": ticker, "action": "buy", "side": "yes",
-        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
-    })
     if batch_create_side_effect:
         api.batch_create_orders = AsyncMock(side_effect=batch_create_side_effect)
     else:
@@ -32,9 +23,19 @@ def _make_executor(batch_create_side_effect=None, get_balance_side_effect=None):
         api.get_balance = AsyncMock(return_value={"balance": 10000})
     api.batch_cancel_orders = AsyncMock(return_value={})
     api.cancel_order = AsyncMock(return_value={})
+    order_builder = MagicMock()
+    order_builder.unwrap_order = lambda raw: raw.get("order", raw)
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+        "ticker": ticker, "action": "sell", "side": "yes",
+        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+    })
+    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+        "ticker": ticker, "action": "buy", "side": "yes",
+        "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+    })
     positions = PositionTracker()
     return ExecutionManager(
-        api=api, positions=positions,
+        api=api, order_builder=order_builder, positions=positions,
         fill_timeout_secs=0, risk_profile=profile,
         timeouts=TimeoutConfig(batch_create=0.1, batch_cancel=0.1, balance=0.1, monitor_poll=0.01),
     ), api

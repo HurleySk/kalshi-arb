@@ -2,7 +2,8 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from src.models import Orderbook, TradeSignal
+from src.core.models import Orderbook, TradeSignal
+from src.exchanges.kalshi.discovery import EventDiscovery
 
 
 def _make_bot():
@@ -14,6 +15,7 @@ def _make_bot():
         cfg.private_key_path = "fake.pem"
         cfg.rest_base_url = "https://fake"
         cfg.ws_url = "wss://fake"
+        cfg.exchange = "kalshi"
         cfg.risk_mode = "aggressive"
         cfg.strategy_overrides = {}
         cfg.fill_timeout_secs = 30
@@ -33,10 +35,16 @@ def _make_bot():
         cfg.recording_balance_poll_interval_secs = 300
         mock_cfg.return_value = cfg
 
-        with patch("src.main.KalshiAuth"):
-            with patch("src.main.KalshiAPI"):
-                with patch("src.main.MarketScanner"):
-                    return ArbBot("fake.yaml")
+        with patch("src.main.create_exchange") as mock_create_exchange:
+            mock_exchange = MagicMock()
+            mock_exchange.api = MagicMock()
+            mock_exchange.fee_model = MagicMock()
+            mock_exchange.order_builder = MagicMock()
+            mock_exchange.constraints = MagicMock()
+            mock_exchange.create_feed = MagicMock(return_value=MagicMock())
+            mock_exchange.create_discovery = MagicMock(return_value=MagicMock())
+            mock_create_exchange.return_value = mock_exchange
+            return ArbBot("fake.yaml")
 
 
 def _setup_boot_reconcile(bot, *, open_orders=None, positions=None):
@@ -47,8 +55,8 @@ def _setup_boot_reconcile(bot, *, open_orders=None, positions=None):
     bot.api.batch_create_orders = AsyncMock(return_value={"orders": [
         {"order": {"order_id": "x", "status": "executed", "ticker": "T", "yes_price_dollars": "0.99"}}
     ]})
-    bot.api.build_close_order = MagicMock(return_value={"ticker": "T", "action": "buy"})
-    bot.api.unwrap_order = MagicMock(return_value={"status": "executed"})
+    bot.order_builder.build_close_order = MagicMock(return_value={"ticker": "T", "action": "buy"})
+    bot.order_builder.unwrap_order = MagicMock(return_value={"status": "executed"})
     bot.positions.load_position = MagicMock()
 
 
@@ -85,7 +93,7 @@ def test_boot_reconcile_closes_shorts():
     _setup_boot_reconcile(bot, positions=positions)
     asyncio.run(bot._boot_reconcile())
     bot.positions.load_position.assert_not_called()
-    bot.api.build_close_order.assert_called_once_with("M_SHORT", -1)
+    bot.order_builder.build_close_order.assert_called_once_with("M_SHORT", -1)
     bot.api.batch_create_orders.assert_called_once()
 
 
@@ -100,7 +108,7 @@ def test_boot_reconcile_handles_mixed_state():
     asyncio.run(bot._boot_reconcile())
     bot.api.batch_cancel_orders.assert_called_once_with(["ORD1"])
     bot.positions.load_position.assert_called_once_with("LONG1", "yes", 3)
-    bot.api.build_close_order.assert_called_once_with("SHORT1", -1)
+    bot.order_builder.build_close_order.assert_called_once_with("SHORT1", -1)
 
 
 def test_pending_execution_prevents_duplicate():
@@ -118,9 +126,9 @@ def test_pending_execution_prevents_duplicate():
     bot.executor.is_circuit_breaker_tripped = MagicMock(return_value=False)
 
     bot.orderbook_mgr.register_event("E1", ["M1", "M2", "M3"])
-    bot.orderbook_mgr.apply_snapshot("M1", {"yes_dollars_fp": [["0.4000", "100"]], "no_dollars_fp": []})
-    bot.orderbook_mgr.apply_snapshot("M2", {"yes_dollars_fp": [["0.3500", "100"]], "no_dollars_fp": []})
-    bot.orderbook_mgr.apply_snapshot("M3", {"yes_dollars_fp": [["0.3500", "100"]], "no_dollars_fp": []})
+    bot.orderbook_mgr.apply_snapshot("M1", {"bids": {40: 100}, "asks": {}})
+    bot.orderbook_mgr.apply_snapshot("M2", {"bids": {35: 100}, "asks": {}})
+    bot.orderbook_mgr.apply_snapshot("M3", {"bids": {35: 100}, "asks": {}})
 
     # Simulate: event already pending execution
     bot.dispatcher._pending_execution.add("E1")
@@ -163,7 +171,7 @@ def test_emergency_shutdown_retries_on_rate_limit():
     ]})
     bot.api.batch_create_orders = AsyncMock(side_effect=mock_batch_create)
     bot.api.batch_cancel_orders = AsyncMock(return_value={})
-    bot.api.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
+    bot.order_builder.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
 
     asyncio.run(bot._emergency_shutdown())
 
@@ -185,7 +193,7 @@ def test_emergency_shutdown_cancel_failure_doesnt_block_close():
         {"ticker": "T1", "position_fp": "1.00"},
     ]})
     bot.api.batch_create_orders = AsyncMock(return_value={"orders": []})
-    bot.api.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
+    bot.order_builder.build_close_order = MagicMock(return_value={"ticker": "T1", "action": "buy"})
 
     asyncio.run(bot._emergency_shutdown())
 
@@ -239,6 +247,10 @@ def test_cleanup_expired_events():
 
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     future = (datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Replace mock discovery with a real EventDiscovery backed by the bot's orderbook manager.
+    discovery = EventDiscovery(api=MagicMock(), orderbook_mgr=bot.orderbook_mgr, scanner=MagicMock())
+    bot.discovery = discovery
 
     bot.discovery.event_tickers = {"E_EXPIRED", "E_ACTIVE"}
     bot.orderbook_mgr.register_event("E_EXPIRED", ["M_EXP1", "M_EXP2"])

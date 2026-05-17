@@ -1,0 +1,80 @@
+import logging
+
+from src.core.models import Orderbook, TradeSignal
+from src.core.fees import arb_profit, exposure_ratio
+from src.core.risk import RiskProfile
+from src.ports.fee_model import FeeModel
+
+logger = logging.getLogger(__name__)
+
+
+def evaluate(
+    event_ticker: str,
+    orderbooks: dict[str, Orderbook],
+    market_metadata: dict[str, dict] | None,
+    fee_model: FeeModel,
+    risk_profile: RiskProfile,
+    recorder=None,
+    max_contracts_per_arb: int = 1,
+) -> TradeSignal | None:
+    if market_metadata is None:
+        market_metadata = {}
+
+    legs: list[tuple[str, float, float]] = []
+    for ticker, book in orderbooks.items():
+        bid = book.best_bid()
+        if bid is None:
+            return None
+        depth = book.bid_depth_at(bid)
+        legs.append((ticker, bid, depth))
+
+    for ticker, price, depth in legs:
+        if depth < risk_profile.near_expiry_min_bid_depth:
+            return None
+
+    if risk_profile.min_ask_depth >= 1:
+        for ticker, _, _ in legs:
+            book = orderbooks[ticker]
+            best_ask = book.best_ask()
+            if best_ask is None:
+                return None
+            if book.ask_depth_at(best_ask) < risk_profile.min_ask_depth:
+                return None
+
+    for ticker, price, depth in legs:
+        meta = market_metadata.get(ticker, {})
+        vol = meta.get("volume_24h", 0)
+        if vol < risk_profile.near_expiry_min_volume_24h:
+            return None
+        if risk_profile.min_open_interest > 0:
+            if meta.get("open_interest", 0) < risk_profile.min_open_interest:
+                return None
+        if risk_profile.min_liquidity > 0:
+            if meta.get("liquidity", 0) < risk_profile.min_liquidity:
+                return None
+
+    bid_prices = [p for _, p, _ in legs]
+    profit = arb_profit(bid_prices, fee_model)
+    if profit <= 0:
+        return None
+
+    profit_pct = profit * 100.0
+    if profit_pct < risk_profile.near_expiry_min_profit_pct:
+        return None
+
+    exp_ratio = exposure_ratio(bid_prices, fee_model)
+    if exp_ratio > risk_profile.max_exposure_ratio:
+        return None
+
+    depths = [d for _, _, d in legs]
+    quantity = max(1, min(int(min(depths)), max_contracts_per_arb))
+
+    return TradeSignal(
+        event_ticker=event_ticker,
+        legs=[(t, p) for t, p, _ in legs],
+        net_profit=profit,
+        profit_pct=profit_pct,
+        exposure_ratio=exp_ratio,
+        signal_type="near_expiry_taker",
+        quantity=quantity,
+    )

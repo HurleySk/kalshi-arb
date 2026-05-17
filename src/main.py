@@ -9,19 +9,17 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from src.auth import KalshiAuth
-from src.api import KalshiAPI
 from src.config import load_config
-from src.dispatch import Dispatcher
-from src.discovery import EventDiscovery
-from src.engine import ArbEngine
+from src.exchanges import create_exchange
+from src.core.dispatch import Dispatcher
+from src.core.engine import ArbEngine
+from src.core.orderbook_manager import OrderbookManager
+from src.core.positions import PositionTracker
+from src.core.recorder import DataRecorder
+from src.core.risk import load_risk_profile
 from src.executor import ExecutionManager
-from src.positions import PositionTracker
-from src.maker import MakerManager
-from src.risk import load_risk_profile
-from src.two_sided import TwoSidedManager
-from src.scanner import MarketScanner, OrderbookManager
-from src.recorder import DataRecorder
+from src.strategies.maker import MakerManager
+from src.strategies.two_sided import TwoSidedManager
 
 logger = logging.getLogger("kalshi-arb")
 
@@ -29,11 +27,15 @@ logger = logging.getLogger("kalshi-arb")
 class ArbBot:
     def __init__(self, config_path: str):
         self.cfg = load_config(config_path)
-        self.auth = KalshiAuth(
-            api_key_id=self.cfg.api_key_id,
-            private_key_path=self.cfg.private_key_path,
-        )
-        self.api = KalshiAPI(base_url=self.cfg.rest_base_url, auth=self.auth)
+        exchange_config = {
+            "api_key_id": self.cfg.api_key_id,
+            "private_key_path": str(self.cfg.private_key_path),
+            "base_url": self.cfg.rest_base_url,
+            "ws_url": self.cfg.ws_url,
+        }
+        self.exchange = create_exchange(self.cfg.exchange, exchange_config)
+        self.api = self.exchange.api
+        self.order_builder = self.exchange.order_builder
         self.orderbook_mgr = OrderbookManager()
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
@@ -47,7 +49,9 @@ class ArbBot:
             self.recorder = DataRecorder()
 
         self.engine = ArbEngine(
+            fee_model=self.exchange.fee_model,
             risk_profile=self.risk_profile,
+            constraints=self.exchange.constraints,
             maker_max_horizon_hours=self.cfg.maker_max_horizon_hours,
             max_contracts_per_arb=self.cfg.max_contracts_per_arb,
             recorder=self.recorder,
@@ -55,6 +59,7 @@ class ArbBot:
         self.positions = PositionTracker(recorder=self.recorder)
         self.executor = ExecutionManager(
             api=self.api,
+            order_builder=self.exchange.order_builder,
             positions=self.positions,
             fill_timeout_secs=self.cfg.fill_timeout_secs,
             risk_profile=self.risk_profile,
@@ -67,6 +72,7 @@ class ArbBot:
         )
         self.maker = MakerManager(
             api=self.api,
+            order_builder=self.exchange.order_builder,
             fill_mode=self.cfg.maker_fill_mode,
             max_events=self.cfg.max_maker_events,
             risk_profile=self.risk_profile,
@@ -74,19 +80,17 @@ class ArbBot:
         ) if self.cfg.maker_enabled else None
         self.two_sided = TwoSidedManager(
             api=self.api,
+            order_builder=self.exchange.order_builder,
             risk_profile=self.risk_profile,
         ) if self.risk_profile.two_sided_max_inventory > 0 else None
-        self.scanner = MarketScanner(
-            ws_url=self.cfg.ws_url,
-            auth=self.auth,
-            orderbook_mgr=self.orderbook_mgr,
-            on_orderbook_update=self._on_orderbook_update,
+        self.scanner = self.exchange.create_feed(
+            self.orderbook_mgr,
+            on_update=self._on_orderbook_update,
             on_fill=self._on_fill,
         )
-        self.discovery = EventDiscovery(
-            api=self.api,
-            orderbook_mgr=self.orderbook_mgr,
-            scanner=self.scanner,
+        self.discovery = self.exchange.create_discovery(
+            self.orderbook_mgr,
+            self.scanner,
         )
         self.dispatcher = Dispatcher(
             engine=self.engine,
@@ -330,7 +334,7 @@ class ArbBot:
                 for mp in positions_resp.get("market_positions", []):
                     qty = int(float(mp.get("position_fp", "0")))
                     if qty != 0:
-                        close_orders.append(self.api.build_close_order(mp["ticker"], qty))
+                        close_orders.append(self.order_builder.build_close_order(mp["ticker"], qty))
                 if close_orders:
                     await asyncio.wait_for(self.api.batch_create_orders(close_orders),
                                            timeout=self._shutdown_api_timeout)
@@ -448,11 +452,11 @@ class ArbBot:
                     "Boot: found %d inherited short position(s) — closing before trading", len(shorts)
                 )
                 for ticker in shorts:
-                    order = self.api.build_close_order(ticker, -1)
+                    order = self.order_builder.build_close_order(ticker, -1)
                     try:
                         result = await asyncio.wait_for(
                             self.api.batch_create_orders([order]), timeout=15)
-                        inner = self.api.unwrap_order(result.get("orders", [{}])[0])
+                        inner = self.order_builder.unwrap_order(result.get("orders", [{}])[0])
                         logger.info("Boot: closed short %s status=%s", ticker, inner.get("status", "?"))
                     except Exception:
                         logger.exception("Boot: failed to close short: %s", ticker)
@@ -545,11 +549,13 @@ class ArbBot:
                 for mt in self.orderbook_mgr.get_event_markets(event_ticker):
                     book = self.orderbook_mgr.get_orderbook(mt)
                     if book:
+                        # Recorder schema uses yes_bids/no_bids column names;
+                        # core Orderbook.bids = yes-side, .asks = no-side (inverted from no_bids)
                         self.recorder.record_orderbook_snapshot(
                             event_ticker=event_ticker,
                             market_ticker=mt,
-                            yes_bids=book.yes_bids,
-                            no_bids=book.no_bids,
+                            yes_bids=book.bids,
+                            no_bids=book.asks,
                         )
 
     async def _balance_loop(self):

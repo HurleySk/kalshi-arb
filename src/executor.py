@@ -5,10 +5,9 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from src.api import KalshiAPI
-from src.models import TradeSignal
-from src.positions import PositionTracker
-from src.risk import RiskProfile
+from src.core.models import TradeSignal
+from src.core.positions import PositionTracker
+from src.core.risk import RiskProfile
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +39,12 @@ class TimeoutConfig:
 
 
 class ExecutionManager:
-    def __init__(self, api: KalshiAPI, positions: PositionTracker,
+    def __init__(self, api, order_builder=None, *, positions: PositionTracker,
                  fill_timeout_secs: int, risk_profile: RiskProfile | None = None,
                  max_session_loss: float = 1.0, circuit_breaker_on_any_loss: bool = True,
                  recorder=None, timeouts: TimeoutConfig | None = None):
         self.api = api
+        self.order_builder = order_builder if order_builder is not None else api
         self.positions = positions
         self.fill_timeout_secs = fill_timeout_secs
         self.recorder = recorder
@@ -92,9 +92,9 @@ class ExecutionManager:
         for i, (ticker, price) in enumerate(signal.legs):
             action = signal.leg_actions[i] if signal.leg_actions else "sell"
             if action == "buy":
-                orders.append(self.api.build_buy_order(ticker=ticker, yes_price=price, quantity=quantity))
+                orders.append(self.order_builder.build_buy_order(ticker, price, quantity))
             else:
-                orders.append(self.api.build_sell_order(ticker=ticker, yes_price=price, quantity=quantity))
+                orders.append(self.order_builder.build_sell_order(ticker, price, quantity))
         return orders
 
     async def execute(self, signal: TradeSignal, quantity: int = 1):
@@ -134,13 +134,13 @@ class ExecutionManager:
             order_list = response.get("orders", [])
             execution = ArbExecution(
                 signal=signal,
-                order_ids=[self.api.unwrap_order(o).get("order_id", "") for o in order_list],
+                order_ids=[self.order_builder.unwrap_order(o).get("order_id", "") for o in order_list],
                 started_at=time.time(),
             )
             self._active = execution
 
             for i, o in enumerate(order_list):
-                inner = self.api.unwrap_order(o)
+                inner = self.order_builder.unwrap_order(o)
                 if inner.get("status") == "executed":
                     oid = inner.get("order_id", "")
                     price = float(inner.get("yes_price_dollars", 0))
@@ -283,10 +283,10 @@ class ExecutionManager:
                 await asyncio.wait_for(self.api.cancel_order(prev_oid), timeout=self._timeouts.batch_cancel)
         except (asyncio.TimeoutError, Exception):
             logger.warning("Failed to cancel previous unwind order %s — proceeding", prev_oid)
-        build = self.api.build_buy_order if action == "buy" else self.api.build_sell_order
-        order = [build(ticker=ticker, yes_price=price_cents / 100, quantity=qty)]
+        build = self.order_builder.build_buy_order if action == "buy" else self.order_builder.build_sell_order
+        order = [build(ticker, price_cents / 100, qty)]
         resp = await asyncio.wait_for(self.api.batch_create_orders(order), timeout=self._timeouts.batch_create)
-        inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
+        inner = self.order_builder.unwrap_order(resp.get("orders", [{}])[0])
         status = inner.get("status", "")
         unwind_price = float(inner.get("yes_price_dollars", 0))
         oid = inner.get("order_id", "")
@@ -311,7 +311,7 @@ class ExecutionManager:
                 logger.exception("Sequential leg %d timed out for %s — aborting", idx, signal.event_ticker)
                 break
 
-            inner = self.api.unwrap_order(resp.get("orders", [{}])[0])
+            inner = self.order_builder.unwrap_order(resp.get("orders", [{}])[0])
             oid = inner.get("order_id", "")
             status = inner.get("status", "")
 
