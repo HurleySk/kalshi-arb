@@ -59,7 +59,7 @@ def load_config(path: str) -> Config:
     with open(path) as f:
         raw = yaml.safe_load(f)
 
-    for key in ("mode", "credentials", "strategy"):
+    for key in ("mode", "strategy"):
         if key not in raw:
             raise ValueError(f"Missing required config key: {key!r}")
 
@@ -69,20 +69,32 @@ def load_config(path: str) -> Config:
 
     exchange = raw.get("exchange", "kalshi")
 
-    creds_section = raw["credentials"]
-    if exchange in creds_section and isinstance(creds_section[exchange], dict):
-        if mode not in creds_section[exchange]:
-            raise ValueError(f"No credentials for exchange {exchange!r} mode {mode!r}")
-        creds = creds_section[exchange][mode]
-    elif mode in creds_section:
-        creds = creds_section[mode]
+    if exchange == "kalshi":
+        if "credentials" not in raw:
+            raise ValueError("Missing required config key: 'credentials'")
+        creds_section = raw["credentials"]
+        if exchange in creds_section and isinstance(creds_section[exchange], dict):
+            if mode not in creds_section[exchange]:
+                raise ValueError(f"No credentials for exchange {exchange!r} mode {mode!r}")
+            creds = creds_section[exchange][mode]
+        elif mode in creds_section:
+            creds = creds_section[mode]
+        else:
+            raise ValueError(f"No credentials for mode {mode!r}")
+        for key in ("api_key_id", "private_key_path"):
+            if key not in creds:
+                raise ValueError(f"Missing credential: {key!r} for mode {mode!r}")
     else:
-        raise ValueError(f"No credentials for mode {mode!r}")
-    for key in ("api_key_id", "private_key_path"):
-        if key not in creds:
-            raise ValueError(f"Missing credential: {key!r} for mode {mode!r}")
+        creds = {}
 
-    rest_url, ws_url = URLS[mode]
+    api_key_id = creds.get("api_key_id", "")
+    private_key_path = (
+        Path(creds["private_key_path"]).expanduser()
+        if creds.get("private_key_path")
+        else Path("/dev/null")
+    )
+    url_pair = URLS.get(mode, ("", ""))
+    rest_url, ws_url = url_pair
     strategy = raw["strategy"]
     logging_cfg = raw.get("logging", {})
     recording_cfg = raw.get("recording", {})
@@ -111,8 +123,8 @@ def load_config(path: str) -> Config:
     return Config(
         mode=mode,
         exchange=exchange,
-        api_key_id=creds["api_key_id"],
-        private_key_path=Path(creds["private_key_path"]).expanduser(),
+        api_key_id=api_key_id,
+        private_key_path=private_key_path,
         rest_base_url=rest_url,
         ws_url=ws_url,
         risk_mode=risk_mode,

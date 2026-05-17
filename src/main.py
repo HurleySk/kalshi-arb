@@ -27,12 +27,21 @@ logger = logging.getLogger("kalshi-arb")
 class ArbBot:
     def __init__(self, config_path: str):
         self.cfg = load_config(config_path)
-        exchange_config = {
-            "api_key_id": self.cfg.api_key_id,
-            "private_key_path": str(self.cfg.private_key_path),
-            "base_url": self.cfg.rest_base_url,
-            "ws_url": self.cfg.ws_url,
-        }
+        if self.cfg.exchange == "predictit":
+            exchange_config = {
+                "proxy_url": self.cfg.predictit_proxy_url,
+                "session_dir": self.cfg.predictit_session_dir,
+                "headless": self.cfg.predictit_headless,
+                "include_withdrawal_fee": self.cfg.predictit_include_withdrawal_fee,
+                "poll_interval_secs": self.cfg.predictit_poll_interval_secs,
+            }
+        else:
+            exchange_config = {
+                "api_key_id": self.cfg.api_key_id,
+                "private_key_path": str(self.cfg.private_key_path),
+                "base_url": self.cfg.rest_base_url,
+                "ws_url": self.cfg.ws_url,
+            }
         self.exchange = create_exchange(self.cfg.exchange, exchange_config)
         self.api = self.exchange.api
         self.order_builder = self.exchange.order_builder
@@ -480,8 +489,8 @@ class ArbBot:
             "max_session_loss": self.cfg.max_session_loss,
             "strategy_overrides": self.cfg.strategy_overrides,
         })
-        logger.info("Starting Kalshi Arb Bot in %s mode (risk: %s)",
-                     self.cfg.mode.upper(), self.cfg.risk_mode)
+        logger.info("Starting %s Arb Bot in %s mode (risk: %s)",
+                     self.cfg.exchange.capitalize(), self.cfg.mode.upper(), self.cfg.risk_mode)
 
         await self._boot_reconcile()
         await self.scanner.connect()
