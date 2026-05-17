@@ -282,7 +282,6 @@ logging:
 
 
 def test_capital_budgets_parsed():
-    import tempfile, os, yaml
     cfg_data = {
         "exchange": "kalshi",
         "mode": "demo",
@@ -294,7 +293,6 @@ def test_capital_budgets_parsed():
         yaml.dump(cfg_data, f)
         path = f.name
     try:
-        from src.config import load_config
         cfg = load_config(path)
         assert cfg.capital_budgets == {"kalshi": 25.0, "predictit": 50.0}
     finally:
@@ -302,7 +300,6 @@ def test_capital_budgets_parsed():
 
 
 def test_capital_budgets_absent_defaults_empty():
-    import tempfile, os, yaml
     cfg_data = {
         "exchange": "kalshi",
         "mode": "demo",
@@ -313,8 +310,25 @@ def test_capital_budgets_absent_defaults_empty():
         yaml.dump(cfg_data, f)
         path = f.name
     try:
-        from src.config import load_config
         cfg = load_config(path)
         assert cfg.capital_budgets == {}
+    finally:
+        os.unlink(path)
+
+
+def test_capital_budgets_zero_and_negative_filtered():
+    cfg_data = {
+        "exchange": "kalshi",
+        "mode": "demo",
+        "credentials": {"demo": {"api_key_id": "k", "private_key_path": "/tmp/k.pem"}},
+        "strategy": {"risk_mode": "conservative"},
+        "capital_budget": {"kalshi": 25.0, "predictit": 0, "ibkr": -5.0},
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(cfg_data, f)
+        path = f.name
+    try:
+        cfg = load_config(path)
+        assert cfg.capital_budgets == {"kalshi": 25.0}
     finally:
         os.unlink(path)

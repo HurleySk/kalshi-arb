@@ -91,7 +91,7 @@ def load_config(path: str) -> Config:
     strategy_overrides = {k: v for k, v in strategy.items() if k in override_keys}
 
     capital_budget_raw = raw.get("capital_budget", {})
-    capital_budgets = {k: float(v) for k, v in capital_budget_raw.items() if v}
+    capital_budgets = {k: float(v) for k, v in capital_budget_raw.items() if v and float(v) > 0}
 
     return Config(
         mode=mode,
