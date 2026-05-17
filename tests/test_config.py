@@ -279,3 +279,42 @@ logging:
     assert cfg.cleanup_interval_secs == 900
     assert cfg.log_max_file_size_mb == 10
     assert cfg.log_max_backup_count == 3
+
+
+def test_capital_budgets_parsed():
+    import tempfile, os, yaml
+    cfg_data = {
+        "exchange": "kalshi",
+        "mode": "demo",
+        "credentials": {"demo": {"api_key_id": "k", "private_key_path": "/tmp/k.pem"}},
+        "strategy": {"risk_mode": "conservative"},
+        "capital_budget": {"kalshi": 25.0, "predictit": 50.0},
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(cfg_data, f)
+        path = f.name
+    try:
+        from src.config import load_config
+        cfg = load_config(path)
+        assert cfg.capital_budgets == {"kalshi": 25.0, "predictit": 50.0}
+    finally:
+        os.unlink(path)
+
+
+def test_capital_budgets_absent_defaults_empty():
+    import tempfile, os, yaml
+    cfg_data = {
+        "exchange": "kalshi",
+        "mode": "demo",
+        "credentials": {"demo": {"api_key_id": "k", "private_key_path": "/tmp/k.pem"}},
+        "strategy": {"risk_mode": "conservative"},
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(cfg_data, f)
+        path = f.name
+    try:
+        from src.config import load_config
+        cfg = load_config(path)
+        assert cfg.capital_budgets == {}
+    finally:
+        os.unlink(path)

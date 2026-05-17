@@ -44,6 +44,7 @@ class Config:
     cleanup_interval_secs: int
     log_max_file_size_mb: int
     log_max_backup_count: int
+    capital_budgets: dict[str, float]
 
 
 def load_config(path: str) -> Config:
@@ -89,6 +90,9 @@ def load_config(path: str) -> Config:
     }
     strategy_overrides = {k: v for k, v in strategy.items() if k in override_keys}
 
+    capital_budget_raw = raw.get("capital_budget", {})
+    capital_budgets = {k: float(v) for k, v in capital_budget_raw.items() if v}
+
     return Config(
         mode=mode,
         exchange=exchange,
@@ -118,4 +122,5 @@ def load_config(path: str) -> Config:
         cleanup_interval_secs=max(60, int(recording_cfg.get("cleanup_interval_secs", 1800))),
         log_max_file_size_mb=max(1, int(logging_cfg.get("max_file_size_mb", 5))),
         log_max_backup_count=max(1, int(logging_cfg.get("max_backup_count", 5))),
+        capital_budgets=capital_budgets,
     )
