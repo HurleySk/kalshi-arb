@@ -5,8 +5,6 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-load_dotenv()
-
 DEMO_REST_URL = "https://external-api.demo.kalshi.co/trade-api/v2"
 DEMO_WS_URL = "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
 LIVE_REST_URL = "https://api.elections.kalshi.com/trade-api/v2"
@@ -56,6 +54,7 @@ class Config:
 
 
 def load_config(path: str) -> Config:
+    load_dotenv()
     with open(path) as f:
         raw = yaml.safe_load(f)
 

@@ -8,11 +8,24 @@ from src.core.orderbook_manager import OrderbookManager
 logger = logging.getLogger(__name__)
 
 
+class _NoOpMonotoneRegistry:
+    """Stub — PredictIt doesn't have threshold-based markets."""
+    def get_families(self) -> dict:
+        return {}
+
+    def try_register(self, event_ticker: str, market_ticker: str, title: str) -> str | None:
+        return None
+
+    def unregister_event(self, event_ticker: str) -> None:
+        pass
+
+
 class PredictItDiscovery:
     def __init__(self, scraper, orderbook_mgr: OrderbookManager, scanner):
         self.scraper = scraper
         self.orderbook_mgr = orderbook_mgr
         self.scanner = scanner
+        self.monotone_registry = _NoOpMonotoneRegistry()
         self.event_tickers: set[str] = set()
         self.market_metadata: dict[str, dict] = {}
         self.event_total_markets: dict[str, int] = {}

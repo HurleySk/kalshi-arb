@@ -1,11 +1,8 @@
-from src.exchanges.kalshi import KalshiExchange
-from src.exchanges.predictit import PredictItExchange
-
-EXCHANGES = {
-    "kalshi": KalshiExchange,
-    "predictit": PredictItExchange,
-}
-
-
 def create_exchange(name: str, config: dict):
-    return EXCHANGES[name](config)
+    if name == "kalshi":
+        from src.exchanges.kalshi import KalshiExchange
+        return KalshiExchange(config)
+    elif name == "predictit":
+        from src.exchanges.predictit import PredictItExchange
+        return PredictItExchange(config)
+    raise KeyError(name)
