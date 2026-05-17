@@ -1,7 +1,11 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DEMO_REST_URL = "https://external-api.demo.kalshi.co/trade-api/v2"
 DEMO_WS_URL = "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
@@ -44,6 +48,11 @@ class Config:
     cleanup_interval_secs: int
     log_max_file_size_mb: int
     log_max_backup_count: int
+    predictit_proxy_url: str | None = None
+    predictit_session_dir: str = "~/.kalshi/predictit_session"
+    predictit_headless: bool = True
+    predictit_include_withdrawal_fee: bool = True
+    predictit_poll_interval_secs: int = 60
 
 
 def load_config(path: str) -> Config:
@@ -77,6 +86,16 @@ def load_config(path: str) -> Config:
     strategy = raw["strategy"]
     logging_cfg = raw.get("logging", {})
     recording_cfg = raw.get("recording", {})
+
+    pi_cfg = raw.get("predictit", {})
+    predictit_proxy_url = os.environ.get("DECODO_PROXY_URL") or pi_cfg.get("proxy_url")
+    predictit_session_dir = (
+        os.environ.get("PREDICTIT_SESSION_DIR")
+        or pi_cfg.get("session_dir", "~/.kalshi/predictit_session")
+    )
+    predictit_headless = pi_cfg.get("headless", True)
+    predictit_include_withdrawal_fee = pi_cfg.get("include_withdrawal_fee", True)
+    predictit_poll_interval_secs = int(pi_cfg.get("poll_interval_secs", 60))
 
     risk_mode = strategy.get("risk_mode", "conservative")
     override_keys = {
@@ -118,4 +137,9 @@ def load_config(path: str) -> Config:
         cleanup_interval_secs=max(60, int(recording_cfg.get("cleanup_interval_secs", 1800))),
         log_max_file_size_mb=max(1, int(logging_cfg.get("max_file_size_mb", 5))),
         log_max_backup_count=max(1, int(logging_cfg.get("max_backup_count", 5))),
+        predictit_proxy_url=predictit_proxy_url,
+        predictit_session_dir=predictit_session_dir,
+        predictit_headless=predictit_headless,
+        predictit_include_withdrawal_fee=predictit_include_withdrawal_fee,
+        predictit_poll_interval_secs=predictit_poll_interval_secs,
     )

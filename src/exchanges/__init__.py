@@ -1,7 +1,9 @@
 from src.exchanges.kalshi import KalshiExchange
+from src.exchanges.predictit import PredictItExchange
 
 EXCHANGES = {
     "kalshi": KalshiExchange,
+    "predictit": PredictItExchange,
 }
 
 
