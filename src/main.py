@@ -309,6 +309,8 @@ class ArbBot:
                 cost,
             )
             self._stats["arbs_executed"] += 1
+            if self.executor.is_event_blacklisted(signal.event_ticker):
+                self.capital_guard.release(self.cfg.exchange, f"taker_{signal.event_ticker}")
             if self.executor.is_circuit_breaker_tripped():
                 await self._emergency_shutdown()
         except Exception:
@@ -368,6 +370,11 @@ class ArbBot:
                     logger.info("Sent %d close orders", len(close_orders))
                 else:
                     logger.info("No positions to close")
+                for mp in positions_resp.get("market_positions", []):
+                    ticker = mp["ticker"]
+                    if not self.reservations.is_reserved(ticker):
+                        self.capital_guard.release(self.cfg.exchange, f"boot_{ticker}")
+                        self.capital_guard.release(self.cfg.exchange, f"taker_{ticker}")
                 return
             except (asyncio.TimeoutError, Exception):
                 if attempt == max_retries - 1:
