@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -51,6 +51,7 @@ class Config:
     predictit_headless: bool = True
     predictit_include_withdrawal_fee: bool = True
     predictit_poll_interval_secs: int = 60
+    capital_budgets: dict[str, float] = field(default_factory=dict)
 
 
 def load_config(path: str) -> Config:
@@ -122,6 +123,9 @@ def load_config(path: str) -> Config:
     }
     strategy_overrides = {k: v for k, v in strategy.items() if k in override_keys}
 
+    capital_budget_raw = raw.get("capital_budget", {})
+    capital_budgets = {k: float(v) for k, v in capital_budget_raw.items() if v and float(v) > 0}
+
     return Config(
         mode=mode,
         exchange=exchange,
@@ -156,4 +160,5 @@ def load_config(path: str) -> Config:
         predictit_headless=predictit_headless,
         predictit_include_withdrawal_fee=predictit_include_withdrawal_fee,
         predictit_poll_interval_secs=predictit_poll_interval_secs,
+        capital_budgets=capital_budgets,
     )

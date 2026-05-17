@@ -9,11 +9,14 @@ logger = logging.getLogger(__name__)
 
 
 class TwoSidedManager:
-    def __init__(self, api, risk_profile: RiskProfile, order_builder=None):
+    def __init__(self, api, risk_profile: RiskProfile, order_builder=None,
+                 capital_guard=None, exchange_name: str = "kalshi"):
         self.api = api
         self.order_builder = order_builder if order_builder is not None else api
         self._timeout_secs = risk_profile.two_sided_timeout_secs
         self._max_inventory = risk_profile.two_sided_max_inventory
+        self._capital_guard = capital_guard
+        self._exchange_name = exchange_name
         # ticker → {buy_id, sell_id, filled_side, quantity, posted_at}
         self._positions: dict[str, dict] = {}
         self._unwind_order_ids: set[str] = set()
@@ -31,6 +34,12 @@ class TwoSidedManager:
         quantity = min(signal.quantity, remaining)
         if quantity <= 0:
             return False
+
+        if self._capital_guard:
+            cost = sum(price for _, price in signal.legs) * quantity
+            if not self._capital_guard.can_execute(self._exchange_name, cost):
+                logger.info("capital_limit: skipping two-sided on %s", signal.event_ticker)
+                return False
 
         buy_leg, sell_leg = signal.legs
         orders = [
@@ -52,6 +61,13 @@ class TwoSidedManager:
             "quantity": quantity,
             "posted_at": time.time(),
         }
+        if self._capital_guard:
+            cost = buy_leg[1] * quantity + sell_leg[1] * quantity
+            self._capital_guard.commit(
+                self._exchange_name,
+                f"twosided_{ticker}",
+                cost,
+            )
         logger.info("Two-sided posted on %s bid=%.2f ask=%.2f qty=%d",
                     ticker, buy_leg[1], sell_leg[1], quantity)
         return True
@@ -68,15 +84,19 @@ class TwoSidedManager:
         for ticker, pos in list(self._positions.items()):
             if pos["buy_id"] == order_id:
                 pos["filled_side"] = "buy"
+                self._positions.pop(ticker, None)
+                if self._capital_guard:
+                    self._capital_guard.release(self._exchange_name, f"twosided_{ticker}")
                 await self.api.cancel_order(pos["sell_id"])
                 await self._unwind_long(ticker, fill_price, quantity)
-                self._positions.pop(ticker, None)
                 return
             if pos["sell_id"] == order_id:
                 pos["filled_side"] = "sell"
+                self._positions.pop(ticker, None)
+                if self._capital_guard:
+                    self._capital_guard.release(self._exchange_name, f"twosided_{ticker}")
                 await self.api.cancel_order(pos["buy_id"])
                 await self._unwind_short(ticker, fill_price, quantity)
-                self._positions.pop(ticker, None)
                 return
 
     async def _unwind_long(self, ticker: str, bought_at: float, quantity: int):
@@ -103,6 +123,8 @@ class TwoSidedManager:
                 await self.api.cancel_order(pos["buy_id"])
                 await self.api.cancel_order(pos["sell_id"])
                 self._positions.pop(ticker, None)
+                if self._capital_guard:
+                    self._capital_guard.release(self._exchange_name, f"twosided_{ticker}")
 
     async def timeout_loop(self):
         while True:

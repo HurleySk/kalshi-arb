@@ -196,3 +196,26 @@ def test_maker_accepts_risk_profile():
     assert maker._tighten_phase1_secs == profile.unwind_phase1_secs
     assert maker._tighten_phase2_secs == profile.unwind_phase2_secs
     assert maker._tighten_step_cents == profile.unwind_price_step_cents
+
+
+def test_maker_post_rejects_when_over_budget():
+    from src.core.capital_guard import CapitalGuard
+
+    guard = CapitalGuard(budgets={"kalshi": 1.0})
+    guard.commit("kalshi", "existing", 0.95)
+
+    api = MagicMock()
+    api.batch_create_orders = AsyncMock()
+    mgr = MakerManager(api=api, capital_guard=guard, exchange_name="kalshi")
+    signal = TradeSignal(
+        event_ticker="EVT1",
+        legs=[("M1", 0.40), ("M2", 0.35), ("M3", 0.35)],
+        net_profit=0.03,
+        profit_pct=3.0,
+        exposure_ratio=1.5,
+        signal_type="maker",
+        quantity=1,
+    )
+    result = asyncio.run(mgr.post(signal))
+    assert result is False
+    api.batch_create_orders.assert_not_called()

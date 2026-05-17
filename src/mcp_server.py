@@ -52,10 +52,16 @@ async def close_all_positions() -> str:
         positions_resp = await api.get_positions()
         market_positions = positions_resp.get("market_positions", [])
 
+        from src.core.reservation_store import ReservationStore
+        store = ReservationStore(path="data/reservations.json")
+
         open_pos = []
         for mp in market_positions:
             qty = int(float(mp.get("position_fp", "0")))
             if qty != 0:
+                if store.is_reserved(mp["ticker"]):
+                    results.append(f"  SKIPPED {mp['ticker']} (reserved)")
+                    continue
                 open_pos.append((mp["ticker"], qty))
 
         if not open_pos:
@@ -102,6 +108,13 @@ async def close_position(ticker: str) -> str:
 
         if not target:
             return f"No position found for {ticker}"
+
+        from src.core.reservation_store import ReservationStore
+        store = ReservationStore(path="data/reservations.json")
+        if store.is_reserved(ticker):
+            res = [r for r in store.list_all() if r.ticker == ticker][0]
+            return (f"WARNING: {ticker} is reserved ({res.quantity}x {res.side}). "
+                    f"Use release_position first if you want to close it.")
 
         qty = int(float(target.get("position_fp", "0")))
         if qty == 0:
@@ -175,6 +188,13 @@ async def get_risk_profile() -> str:
 
     if cfg.strategy_overrides:
         lines.append(f"\nOverrides applied: {cfg.strategy_overrides}")
+
+    if cfg.capital_budgets:
+        lines.append(f"\nCapital budgets:")
+        for exchange, budget in cfg.capital_budgets.items():
+            lines.append(f"  {exchange}: ${budget:.2f}")
+    else:
+        lines.append(f"\nCapital budgets: unlimited (none configured)")
 
     return "\n".join(lines)
 
@@ -402,6 +422,76 @@ async def get_replay_comparison(
     if proposed["test_theoretical_profit"] < current["test_theoretical_profit"]:
         lines.append("WARNING: Proposed value performs WORSE on out-of-sample test data")
 
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def reserve_position(
+    ticker: str,
+    side: str,
+    quantity: int,
+    exchange: str = "kalshi",
+    note: str = "",
+) -> str:
+    """Reserve a position as user-owned. The bot will not close, unwind, or interfere with it.
+
+    Args:
+        ticker: Market ticker (e.g. KXBTC-25MAY16-T55000)
+        side: Position side ("yes" or "no")
+        quantity: Number of contracts to reserve
+        exchange: Exchange name (default: kalshi)
+        note: Optional annotation for this reservation
+    """
+    from src.core.reservation_store import ReservationStore
+    store = ReservationStore(path="data/reservations.json")
+    store.reserve(ticker, side, quantity, exchange, note)
+    all_res = store.list_all()
+    lines = [f"Reserved {quantity}x {side} on {ticker} ({exchange})"]
+    if note:
+        lines.append(f"  Note: {note}")
+    lines.append(f"\nAll reservations ({len(all_res)}):")
+    for r in all_res:
+        lines.append(f"  {r.ticker}: {r.quantity}x {r.side} on {r.exchange}" +
+                     (f" — {r.note}" if r.note else ""))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def release_position(ticker: str) -> str:
+    """Release a previously reserved position. The bot may now manage this position.
+
+    Args:
+        ticker: Market ticker to release
+    """
+    from src.core.reservation_store import ReservationStore
+    store = ReservationStore(path="data/reservations.json")
+    if not store.is_reserved(ticker):
+        return f"No reservation found for {ticker}"
+    store.release(ticker)
+    all_res = store.list_all()
+    lines = [f"Released reservation on {ticker}"]
+    lines.append(f"\nRemaining reservations ({len(all_res)}):")
+    for r in all_res:
+        lines.append(f"  {r.ticker}: {r.quantity}x {r.side} on {r.exchange}" +
+                     (f" — {r.note}" if r.note else ""))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def list_reservations() -> str:
+    """List all active position reservations."""
+    from src.core.reservation_store import ReservationStore
+    store = ReservationStore(path="data/reservations.json")
+    all_res = store.list_all()
+    if not all_res:
+        return "No active reservations."
+    lines = [f"Active reservations ({len(all_res)}):"]
+    for r in all_res:
+        lines.append(
+            f"  {r.ticker}: {r.quantity}x {r.side} on {r.exchange}"
+            + (f" — {r.note}" if r.note else "")
+            + f" (since {r.created_at[:10]})"
+        )
     return "\n".join(lines)
 
 

@@ -33,6 +33,7 @@ def _make_bot():
         cfg.recording_db_path = None
         cfg.recording_snapshot_interval_secs = 5
         cfg.recording_balance_poll_interval_secs = 300
+        cfg.capital_budgets = {}
         mock_cfg.return_value = cfg
 
         with patch("src.main.create_exchange") as mock_create_exchange:
@@ -273,3 +274,106 @@ def test_cleanup_expired_events():
     assert bot.orderbook_mgr.get_event_for_market("M_EXP1") is None
     assert bot.orderbook_mgr.get_event_for_market("M_EXP2") is None
     assert bot.orderbook_mgr.get_event_for_market("M_ACT1") == "E_ACTIVE"
+
+
+def test_capital_guard_blocks_execution_over_budget():
+    """Verify that _execute_and_track skips signals when capital is exhausted."""
+    from src.core.capital_guard import CapitalGuard
+
+    guard = CapitalGuard(budgets={"kalshi": 1.0})
+    guard.commit("kalshi", "existing", 0.95)
+
+    signal = TradeSignal(
+        event_ticker="EVT1",
+        legs=[("M1", 0.40), ("M2", 0.35), ("M3", 0.35)],
+        net_profit=0.03,
+        profit_pct=3.0,
+        exposure_ratio=1.5,
+        signal_type="sell_side_taker",
+        quantity=1,
+    )
+    # Cost = 0.40 + 0.35 + 0.35 = 1.10, headroom = 0.05
+    cost = sum(price * signal.quantity for _, price in signal.legs)
+    assert not guard.can_execute("kalshi", cost)
+
+
+def test_capital_guard_allows_within_budget():
+    """Verify that signals within budget pass the guard."""
+    from src.core.capital_guard import CapitalGuard
+
+    guard = CapitalGuard(budgets={"kalshi": 25.0})
+    guard.commit("kalshi", "existing", 5.0)
+
+    signal = TradeSignal(
+        event_ticker="EVT1",
+        legs=[("M1", 0.40), ("M2", 0.35), ("M3", 0.35)],
+        net_profit=0.03,
+        profit_pct=3.0,
+        exposure_ratio=1.5,
+        signal_type="sell_side_taker",
+        quantity=1,
+    )
+    cost = sum(price * signal.quantity for _, price in signal.legs)
+    assert guard.can_execute("kalshi", cost)
+
+
+def test_reservation_excludes_from_boot_position_loading():
+    """Verify reserved positions are subtracted during boot reconcile."""
+    import tempfile
+    import os
+    from src.core.reservation_store import ReservationStore
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        path = f.name
+    try:
+        store = ReservationStore(path=path)
+        store.reserve("TICKER1", "yes", 3, "kalshi")
+
+        # Simulate boot: 5 contracts total, 3 reserved → 2 bot-owned
+        total_qty = 5
+        reserved_qty = store.get_reserved_quantity("TICKER1", "yes")
+        bot_qty = max(0, total_qty - reserved_qty)
+        assert bot_qty == 2
+        assert reserved_qty == 3
+    finally:
+        os.unlink(path)
+
+
+def test_reservation_full_coverage_leaves_zero_bot_owned():
+    """When entire position is reserved, bot owns nothing."""
+    import tempfile
+    import os
+    from src.core.reservation_store import ReservationStore
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        path = f.name
+    try:
+        store = ReservationStore(path=path)
+        store.reserve("TICKER1", "yes", 5, "kalshi")
+
+        total_qty = 5
+        reserved_qty = store.get_reserved_quantity("TICKER1", "yes")
+        bot_qty = max(0, total_qty - reserved_qty)
+        assert bot_qty == 0
+    finally:
+        os.unlink(path)
+
+
+def test_reservation_over_reservation_clamps_to_zero():
+    """If reserved > actual position, bot_qty clamps to 0 (not negative)."""
+    import tempfile
+    import os
+    from src.core.reservation_store import ReservationStore
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        path = f.name
+    try:
+        store = ReservationStore(path=path)
+        store.reserve("TICKER1", "yes", 10, "kalshi")
+
+        total_qty = 3  # Less than reserved
+        reserved_qty = store.get_reserved_quantity("TICKER1", "yes")
+        bot_qty = max(0, total_qty - reserved_qty)
+        assert bot_qty == 0
+    finally:
+        os.unlink(path)

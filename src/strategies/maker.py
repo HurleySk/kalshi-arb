@@ -30,10 +30,13 @@ class MakerManager:
     def __init__(self, api, order_builder=None, fill_mode: str = "cancel_and_take",
                  max_events: int = 3, risk_profile=None,
                  tighten_phase1_secs: int = 15, tighten_phase2_secs: int = 30,
-                 tighten_step_cents: int = 3, track_fill_id=None):
+                 tighten_step_cents: int = 3, track_fill_id=None,
+                 capital_guard=None, exchange_name: str = "kalshi"):
         self.api = api
         self.order_builder = order_builder if order_builder is not None else api
         self._track_fill_id = track_fill_id or (lambda oid: None)
+        self._capital_guard = capital_guard
+        self._exchange_name = exchange_name
         if fill_mode not in self.VALID_FILL_MODES:
             logger.warning("Unknown fill_mode %r, falling back to cancel_and_take", fill_mode)
             fill_mode = "cancel_and_take"
@@ -77,6 +80,14 @@ class MakerManager:
                 return False
         if len(self._active) >= self.max_events:
             return False
+
+        if self._capital_guard:
+            # Pre-check uses signal prices (conservative estimate); actual commit
+            # below uses API-response prices which may differ due to price improvement
+            cost = sum(price for _, price in signal.legs)
+            if not self._capital_guard.can_execute(self._exchange_name, cost):
+                logger.info("capital_limit: skipping maker on %s", signal.event_ticker)
+                return False
 
         self._posting.add(signal.event_ticker)
         try:
@@ -128,6 +139,13 @@ class MakerManager:
                     return False
 
                 self._active[signal.event_ticker] = event
+                if self._capital_guard:
+                    cost = sum(event.order_prices.values())
+                    self._capital_guard.commit(
+                        self._exchange_name,
+                        f"maker_{signal.event_ticker}",
+                        cost,
+                    )
                 logger.info("Posted maker orders on %s: %d legs", signal.event_ticker, len(event.order_ids))
                 return True
         except Exception:
@@ -139,6 +157,8 @@ class MakerManager:
         event = self._active.pop(event_ticker, None)
         if not event:
             return
+        if self._capital_guard:
+            self._capital_guard.release(self._exchange_name, f"maker_{event_ticker}")
         unfilled_oids = [
             oid for oid in event.order_ids.values()
             if oid not in event.filled
@@ -336,4 +356,6 @@ class MakerManager:
         if event:
             for oid in event.order_ids.values():
                 self._order_to_event.pop(oid, None)
+        if self._capital_guard:
+            self._capital_guard.release(self._exchange_name, f"maker_{event_ticker}")
         self._completed[event_ticker] = time.time()

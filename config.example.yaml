@@ -92,3 +92,9 @@ recording:
 # filters or use aggressive risk mode, otherwise all signals get rejected:
 #   min_bid_depth: 1
 #   min_ask_depth: 1
+# Capital budget per exchange (omit or set to 0 for unlimited)
+# Bot will not deploy more than this amount on a given exchange.
+# Resting orders (maker, two-sided) count toward the budget.
+# capital_budget:
+#   kalshi: 25.00
+#   predictit: 50.00

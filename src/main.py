@@ -16,6 +16,8 @@ from src.core.engine import ArbEngine
 from src.core.orderbook_manager import OrderbookManager
 from src.core.positions import PositionTracker
 from src.core.recorder import DataRecorder
+from src.core.capital_guard import CapitalGuard
+from src.core.reservation_store import ReservationStore
 from src.core.risk import load_risk_profile
 from src.executor import ExecutionManager
 from src.strategies.maker import MakerManager
@@ -48,6 +50,9 @@ class ArbBot:
         self.orderbook_mgr = OrderbookManager()
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
+
+        self.reservations = ReservationStore(path="data/reservations.json")
+        self.capital_guard = CapitalGuard(budgets=self.cfg.capital_budgets)
 
         if self.cfg.recording_enabled:
             self.recorder = DataRecorder(
@@ -86,11 +91,15 @@ class ArbBot:
             max_events=self.cfg.max_maker_events,
             risk_profile=self.risk_profile,
             track_fill_id=self.executor._track_fill_id,
+            capital_guard=self.capital_guard,
+            exchange_name=self.cfg.exchange,
         ) if self.cfg.maker_enabled else None
         self.two_sided = TwoSidedManager(
             api=self.api,
             order_builder=self.exchange.order_builder,
             risk_profile=self.risk_profile,
+            capital_guard=self.capital_guard,
+            exchange_name=self.cfg.exchange,
         ) if self.risk_profile.two_sided_max_inventory > 0 else None
         self.scanner = self.exchange.create_feed(
             self.orderbook_mgr,
@@ -287,13 +296,30 @@ class ArbBot:
                     failed_until[event_ticker] = time.time() + 60
 
     async def _execute_and_track(self, signal):
+        # Conservative estimate: uses bid prices as cost (over-estimates for sell-side arbs
+        # where true risk is (1-price)*qty, but safe — will reject before exceeding budget)
+        cost = sum(price * signal.quantity for _, price in signal.legs)
+        if not self.capital_guard.can_execute(self.cfg.exchange, cost):
+            logger.info(
+                "capital_limit: skipping %s (need $%.4f, headroom $%.4f)",
+                signal.event_ticker, cost, self.capital_guard.headroom(self.cfg.exchange),
+            )
+            self.dispatcher.mark_execution_complete(signal.event_ticker)
+            return
         try:
             tickers = [t for t, _ in signal.legs]
             if not await self._validate_recent_trades(tickers):
                 logger.info("Recent trades check failed for %s, skipping", signal.event_ticker)
                 return
             await self.executor.execute(signal, quantity=signal.quantity)
+            self.capital_guard.commit(
+                self.cfg.exchange,
+                f"taker_{signal.event_ticker}",
+                cost,
+            )
             self._stats["arbs_executed"] += 1
+            if self.executor.is_event_blacklisted(signal.event_ticker):
+                self.capital_guard.release(self.cfg.exchange, f"taker_{signal.event_ticker}")
             if self.executor.is_circuit_breaker_tripped():
                 await self._emergency_shutdown()
         except Exception:
@@ -343,6 +369,9 @@ class ArbBot:
                 for mp in positions_resp.get("market_positions", []):
                     qty = int(float(mp.get("position_fp", "0")))
                     if qty != 0:
+                        if self.reservations.is_reserved(mp["ticker"]):
+                            logger.info("Emergency shutdown: skipping reserved %s", mp["ticker"])
+                            continue
                         close_orders.append(self.order_builder.build_close_order(mp["ticker"], qty))
                 if close_orders:
                     await asyncio.wait_for(self.api.batch_create_orders(close_orders),
@@ -350,6 +379,7 @@ class ArbBot:
                     logger.info("Sent %d close orders", len(close_orders))
                 else:
                     logger.info("No positions to close")
+                self.capital_guard.release_all(self.cfg.exchange)
                 return
             except (asyncio.TimeoutError, Exception):
                 if attempt == max_retries - 1:
@@ -391,12 +421,19 @@ class ArbBot:
                         except (ValueError, TypeError):
                             pass
 
+            capital_info = ""
+            if self.cfg.capital_budgets.get(self.cfg.exchange):
+                capital_info = (
+                    f" | capital_deployed=${self.capital_guard.deployed(self.cfg.exchange):.2f}"
+                    f" | capital_headroom=${self.capital_guard.headroom(self.cfg.exchange):.2f}"
+                )
+
             logger.info(
                 "STATUS | uptime=%.0fs | events=%d | arbs_detected=%d | "
                 "arbs_executed=%d | arbs_failed=%d | theoretical_profit=$%.4f | "
                 "open_positions=%d | unrealized_premium=$%.4f | "
                 "realized_pnl=$%.4f | session_loss=$%.4f | circuit_breaker=%s | "
-                "maker_events=%d | maker_horizon=%d",
+                "maker_events=%d | maker_horizon=%d%s",
                 uptime,
                 len(self.discovery.event_tickers),
                 self._stats["arbs_detected"],
@@ -410,6 +447,7 @@ class ArbBot:
                 cb_status,
                 maker_count,
                 maker_horizon_events,
+                capital_info,
             )
 
     async def _boot_reconcile(self):
@@ -444,10 +482,29 @@ class ArbBot:
             longs, shorts = [], []
             for mp in positions_resp.get("market_positions", []):
                 qty = int(float(mp.get("position_fp", "0")))
+                ticker = mp["ticker"]
+                avg_price = float(mp.get("average_price_fp", "0") or "0")
+
                 if qty > 0:
-                    longs.append((mp["ticker"], qty))
+                    reserved_qty = self.reservations.get_reserved_quantity(ticker, "yes")
+                    bot_qty = max(0, qty - reserved_qty)
+                    if reserved_qty > 0:
+                        logger.info(
+                            "Boot: %s has %d total, %d reserved, %d bot-owned",
+                            ticker, qty, reserved_qty, bot_qty,
+                        )
+                    if bot_qty > 0:
+                        longs.append((ticker, bot_qty))
+                        self.capital_guard.commit(
+                            self.cfg.exchange,
+                            f"boot_{ticker}",
+                            avg_price * bot_qty,
+                        )
                 elif qty < 0:
-                    shorts.append(mp["ticker"])
+                    if self.reservations.is_reserved(ticker):
+                        logger.info("Boot: skipping short close for reserved %s", ticker)
+                        continue
+                    shorts.append(ticker)
 
             if longs:
                 logger.warning(
