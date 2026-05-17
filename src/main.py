@@ -283,6 +283,8 @@ class ArbBot:
                     failed_until[event_ticker] = time.time() + 60
 
     async def _execute_and_track(self, signal):
+        # Conservative estimate: uses bid prices as cost (over-estimates for sell-side arbs
+        # where true risk is (1-price)*qty, but safe — will reject before exceeding budget)
         cost = sum(price * signal.quantity for _, price in signal.legs)
         if not self.capital_guard.can_execute(self.cfg.exchange, cost):
             logger.info(
