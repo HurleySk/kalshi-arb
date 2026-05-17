@@ -116,6 +116,15 @@ class ArbEngine:
                 if meta.get("liquidity", 0) < self.risk_profile.min_liquidity:
                     return None
 
+        if self.risk_profile.min_ask_depth >= 1:
+            for ticker, _ in legs:
+                book = orderbooks[ticker]
+                best_ask = book.best_ask()
+                if best_ask is None:
+                    return None
+                if book.ask_depth_at(best_ask) < self.risk_profile.min_ask_depth:
+                    return None
+
         bid_prices = [p for _, p in legs]
         bid_sum = sum(bid_prices)
         profit = maker_arb_profit(bid_prices, self.fee_model)
