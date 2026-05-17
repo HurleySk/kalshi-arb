@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from src.core.models import Event, Market
 from src.core.orderbook_manager import OrderbookManager
-from src.exchanges.predictit.anti_detect import random_delay
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +84,20 @@ class PredictItDiscovery:
                 close_str = meta.get("close_time", "")
                 if not close_str:
                     all_expired = False
-                    continue
+                    break
                 try:
                     close_dt = datetime.fromisoformat(close_str.replace("Z", "+00:00"))
                     if close_dt.tzinfo is None:
                         close_dt = close_dt.replace(tzinfo=timezone.utc)
                     if close_dt > now:
                         all_expired = False
+                        break
                 except (ValueError, TypeError):
                     all_expired = False
+                    break
             if all_expired:
                 self.event_tickers.discard(event_ticker)
+                self.orderbook_mgr.unregister_event(event_ticker)
                 for mt in market_tickers:
                     self.market_metadata.pop(mt, None)
                 self.event_total_markets.pop(event_ticker, None)
@@ -105,7 +107,7 @@ class PredictItDiscovery:
 
     async def full_scan(self) -> None:
         try:
-            data = self.scraper.fetch()
+            data = await self.scraper.fetch()
             parsed = self.scraper.parse_markets(data)
             events = self._convert_to_events(parsed)
             new_tickers = self.register_events(events)

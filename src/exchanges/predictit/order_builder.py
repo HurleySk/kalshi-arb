@@ -4,9 +4,9 @@ PREDICTIT_BASE_URL = "https://www.predictit.org"
 class PredictItOrderBuilder:
     def _parse_ticker(self, ticker: str) -> tuple[int, int]:
         parts = ticker.split("-")
-        market_id = int(parts[1])
-        contract_id = int(parts[2])
-        return market_id, contract_id
+        if len(parts) != 3 or parts[0] != "PI":
+            raise ValueError(f"Invalid PredictIt ticker format: {ticker!r} (expected PI-<market_id>-<contract_id>)")
+        return int(parts[1]), int(parts[2])
 
     def build_sell_order(self, ticker: str, price: float, quantity: int) -> dict:
         market_id, contract_id = self._parse_ticker(ticker)

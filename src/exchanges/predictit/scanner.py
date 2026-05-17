@@ -76,7 +76,7 @@ class PredictItScanner:
     async def listen(self) -> None:
         while not self._stopping:
             try:
-                data = self.scraper.fetch()
+                data = await self.scraper.fetch()
                 current = self._build_contract_map(data)
                 changed = self._detect_changes(self._previous_data, current)
                 self._previous_data = current
@@ -84,7 +84,10 @@ class PredictItScanner:
                 for ticker in changed:
                     contract = current[ticker]
                     book = self._build_orderbook(contract)
-                    self.orderbook_mgr.set_orderbook(ticker, book)
+                    self.orderbook_mgr.apply_snapshot(ticker, {
+                        "bids": book.bids,
+                        "asks": book.asks,
+                    })
                     if self.on_orderbook_update:
                         self.on_orderbook_update(ticker)
 
