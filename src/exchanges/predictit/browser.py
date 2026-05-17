@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-import re
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,13 +19,17 @@ class PredictItBrowser:
         proxy_url: str | None,
         headless: bool = True,
     ):
-        self.session_dir = Path(session_dir)
+        self.session_dir = Path(session_dir).expanduser()
         self.proxy_url = proxy_url
         self.headless = headless
         self._playwright = None
         self._browser = None
         self._context = None
         self._page = None
+
+    @property
+    def page(self):
+        return self._page
 
     @property
     def _state_path(self) -> Path:
@@ -70,7 +74,16 @@ class PredictItBrowser:
     async def save_session(self) -> None:
         if self._context:
             state = await self._context.storage_state()
-            self._state_path.write_text(json.dumps(state, indent=2))
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", dir=self.session_dir, suffix=".tmp", delete=False,
+            )
+            try:
+                tmp.write(json.dumps(state, indent=2))
+                tmp.close()
+                Path(tmp.name).replace(self._state_path)
+            except Exception:
+                Path(tmp.name).unlink(missing_ok=True)
+                raise
             logger.info("Session state saved to %s", self._state_path)
 
     async def is_logged_in(self) -> bool:
@@ -93,7 +106,7 @@ class PredictItBrowser:
             await self.launch()
         await self._page.goto(f"{self.PREDICTIT_URL}/account/signin", wait_until="domcontentloaded")
         logger.info("Please log in to PredictIt in the browser window. Press Enter when done.")
-        await asyncio.get_event_loop().run_in_executor(None, input)
+        await asyncio.get_running_loop().run_in_executor(None, input)
         await self.save_session()
 
     async def navigate_to_market(self, market_id: int) -> None:
@@ -105,13 +118,17 @@ class PredictItBrowser:
         await asyncio.sleep(random_delay(min_secs=1.0, max_secs=2.0))
 
     async def close(self) -> None:
-        if self._context:
-            await self.save_session()
-        if self._browser:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
-        self._page = None
-        self._context = None
-        self._browser = None
-        self._playwright = None
+        try:
+            if self._context:
+                await self.save_session()
+        except Exception:
+            logger.exception("Failed to save session during close")
+        finally:
+            if self._browser:
+                await self._browser.close()
+            if self._playwright:
+                await self._playwright.stop()
+            self._page = None
+            self._context = None
+            self._browser = None
+            self._playwright = None

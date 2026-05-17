@@ -41,3 +41,7 @@ class PredictItExchange:
             orderbook_mgr=orderbook_mgr,
             scanner=scanner,
         )
+
+    async def close(self) -> None:
+        await self.api.close()
+        await self._scraper.close()

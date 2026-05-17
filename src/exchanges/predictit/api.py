@@ -39,15 +39,15 @@ class PredictItAPI:
             market_id, order["contract_id"],
         )
 
-        page = self._browser._page
+        page = self._browser.page
         if page is None:
             raise RuntimeError("Browser page not available")
 
-        # TODO: Implement actual Playwright form interaction once we have
-        # the PredictIt trading UI selectors mapped. For now, this scaffolds
-        # the flow: navigate → find contract → select action → fill form → submit.
-        # The selectors will be discovered during Phase 2 validation when
-        # we can inspect the live site.
+        # Phase 1 scaffold: returns "pending" status, which causes the executor
+        # to treat this as a resting order and trigger cancel/unwind. This is
+        # safe behavior for the scaffold. Phase 2 must implement actual Playwright
+        # form interaction and return executor-compatible response fields:
+        # status="executed", yes_price_dollars, fill_count_fp, side, ticker.
 
         return {
             "order_id": order_id,

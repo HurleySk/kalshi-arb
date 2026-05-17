@@ -16,7 +16,7 @@ def test_browser_init_defaults():
     assert browser.session_dir == Path("/tmp/test_session")
     assert browser.proxy_url is None
     assert browser.headless is True
-    assert browser._page is None
+    assert browser.page is None
 
 
 def test_browser_init_with_proxy():

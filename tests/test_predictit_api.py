@@ -8,7 +8,7 @@ def make_api(browser=None):
     if browser is None:
         browser = MagicMock()
         browser.navigate_to_market = AsyncMock()
-        browser._page = MagicMock()
+        browser.page = MagicMock()
         browser._page.query_selector = AsyncMock(return_value=None)
         browser._page.query_selector_all = AsyncMock(return_value=[])
         browser._page.evaluate = AsyncMock(return_value=None)
