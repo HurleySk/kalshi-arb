@@ -352,6 +352,9 @@ class ArbBot:
                 for mp in positions_resp.get("market_positions", []):
                     qty = int(float(mp.get("position_fp", "0")))
                     if qty != 0:
+                        if self.reservations.is_reserved(mp["ticker"]):
+                            logger.info("Emergency shutdown: skipping reserved %s", mp["ticker"])
+                            continue
                         close_orders.append(self.order_builder.build_close_order(mp["ticker"], qty))
                 if close_orders:
                     await asyncio.wait_for(self.api.batch_create_orders(close_orders),
@@ -461,10 +464,29 @@ class ArbBot:
             longs, shorts = [], []
             for mp in positions_resp.get("market_positions", []):
                 qty = int(float(mp.get("position_fp", "0")))
+                ticker = mp["ticker"]
+                avg_price = float(mp.get("average_price_fp", "0") or "0")
+
                 if qty > 0:
-                    longs.append((mp["ticker"], qty))
+                    reserved_qty = self.reservations.get_reserved_quantity(ticker, "yes")
+                    bot_qty = max(0, qty - reserved_qty)
+                    if reserved_qty > 0:
+                        logger.info(
+                            "Boot: %s has %d total, %d reserved, %d bot-owned",
+                            ticker, qty, reserved_qty, bot_qty,
+                        )
+                    if bot_qty > 0:
+                        longs.append((ticker, bot_qty))
+                        self.capital_guard.commit(
+                            self.cfg.exchange,
+                            f"boot_{ticker}",
+                            avg_price * bot_qty,
+                        )
                 elif qty < 0:
-                    shorts.append(mp["ticker"])
+                    if self.reservations.is_reserved(ticker):
+                        logger.info("Boot: skipping short close for reserved %s", ticker)
+                        continue
+                    shorts.append(ticker)
 
             if longs:
                 logger.warning(
