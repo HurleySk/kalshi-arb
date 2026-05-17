@@ -3,7 +3,7 @@ import time
 
 import httpx
 
-from src.exchanges.predictit.anti_detect import get_headers, random_delay
+from src.exchanges.predictit.anti_detect import get_headers
 
 logger = logging.getLogger(__name__)
 

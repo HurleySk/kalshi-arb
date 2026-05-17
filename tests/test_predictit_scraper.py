@@ -1,6 +1,3 @@
-import json
-from unittest.mock import patch, MagicMock
-
 from src.exchanges.predictit.scraper import PredictItScraper, PREDICTIT_API_URL
 
 SAMPLE_RESPONSE = {

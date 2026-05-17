@@ -1,5 +1,3 @@
-import time
-
 from src.exchanges.predictit.anti_detect import (
     USER_AGENTS,
     get_headers,
