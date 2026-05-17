@@ -84,19 +84,19 @@ class TwoSidedManager:
         for ticker, pos in list(self._positions.items()):
             if pos["buy_id"] == order_id:
                 pos["filled_side"] = "buy"
-                await self.api.cancel_order(pos["sell_id"])
-                await self._unwind_long(ticker, fill_price, quantity)
                 self._positions.pop(ticker, None)
                 if self._capital_guard:
                     self._capital_guard.release(self._exchange_name, f"twosided_{ticker}")
+                await self.api.cancel_order(pos["sell_id"])
+                await self._unwind_long(ticker, fill_price, quantity)
                 return
             if pos["sell_id"] == order_id:
                 pos["filled_side"] = "sell"
-                await self.api.cancel_order(pos["buy_id"])
-                await self._unwind_short(ticker, fill_price, quantity)
                 self._positions.pop(ticker, None)
                 if self._capital_guard:
                     self._capital_guard.release(self._exchange_name, f"twosided_{ticker}")
+                await self.api.cancel_order(pos["buy_id"])
+                await self._unwind_short(ticker, fill_price, quantity)
                 return
 
     async def _unwind_long(self, ticker: str, bought_at: float, quantity: int):

@@ -94,3 +94,28 @@ def test_owns_order_returns_true_for_known_ids():
     assert manager.owns_order("BUY1")
     assert manager.owns_order("SELL1")
     assert not manager.owns_order("UNKNOWN")
+
+
+def test_post_rejects_when_over_budget():
+    from src.core.capital_guard import CapitalGuard
+    from src.core.risk import load_risk_profile
+    from src.core.models import TradeSignal
+
+    profile = load_risk_profile("aggressive", {"two_sided_max_inventory": 10})
+    guard = CapitalGuard(budgets={"kalshi": 1.0})
+    guard.commit("kalshi", "existing", 0.95)
+
+    api = MagicMock()
+    mgr = TwoSidedManager(api=api, risk_profile=profile, capital_guard=guard, exchange_name="kalshi")
+    signal = TradeSignal(
+        event_ticker="EVT1",
+        legs=[("M1", 0.40), ("M1", 0.60)],
+        net_profit=0.02,
+        profit_pct=2.0,
+        exposure_ratio=1.5,
+        signal_type="two_sided",
+        quantity=1,
+    )
+    result = asyncio.run(mgr.post(signal))
+    assert result is False
+    api.batch_create_orders.assert_not_called()

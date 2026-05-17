@@ -82,6 +82,8 @@ class MakerManager:
             return False
 
         if self._capital_guard:
+            # Pre-check uses signal prices (conservative estimate); actual commit
+            # below uses API-response prices which may differ due to price improvement
             cost = sum(price for _, price in signal.legs)
             if not self._capital_guard.can_execute(self._exchange_name, cost):
                 logger.info("capital_limit: skipping maker on %s", signal.event_ticker)
