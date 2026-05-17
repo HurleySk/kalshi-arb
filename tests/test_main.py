@@ -33,6 +33,7 @@ def _make_bot():
         cfg.recording_db_path = None
         cfg.recording_snapshot_interval_secs = 5
         cfg.recording_balance_poll_interval_secs = 300
+        cfg.capital_budgets = {}
         mock_cfg.return_value = cfg
 
         with patch("src.main.create_exchange") as mock_create_exchange:

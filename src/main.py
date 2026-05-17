@@ -16,6 +16,8 @@ from src.core.engine import ArbEngine
 from src.core.orderbook_manager import OrderbookManager
 from src.core.positions import PositionTracker
 from src.core.recorder import DataRecorder
+from src.core.capital_guard import CapitalGuard
+from src.core.reservation_store import ReservationStore
 from src.core.risk import load_risk_profile
 from src.executor import ExecutionManager
 from src.strategies.maker import MakerManager
@@ -39,6 +41,9 @@ class ArbBot:
         self.orderbook_mgr = OrderbookManager()
 
         self.risk_profile = load_risk_profile(self.cfg.risk_mode, self.cfg.strategy_overrides)
+
+        self.reservations = ReservationStore(path="data/reservations.json")
+        self.capital_guard = CapitalGuard(budgets=self.cfg.capital_budgets)
 
         if self.cfg.recording_enabled:
             self.recorder = DataRecorder(
@@ -278,12 +283,25 @@ class ArbBot:
                     failed_until[event_ticker] = time.time() + 60
 
     async def _execute_and_track(self, signal):
+        cost = sum(price * signal.quantity for _, price in signal.legs)
+        if not self.capital_guard.can_execute(self.cfg.exchange, cost):
+            logger.info(
+                "capital_limit: skipping %s (need $%.4f, headroom $%.4f)",
+                signal.event_ticker, cost, self.capital_guard.headroom(self.cfg.exchange),
+            )
+            self.dispatcher.mark_execution_complete(signal.event_ticker)
+            return
         try:
             tickers = [t for t, _ in signal.legs]
             if not await self._validate_recent_trades(tickers):
                 logger.info("Recent trades check failed for %s, skipping", signal.event_ticker)
                 return
             await self.executor.execute(signal, quantity=signal.quantity)
+            self.capital_guard.commit(
+                self.cfg.exchange,
+                f"taker_{signal.event_ticker}",
+                cost,
+            )
             self._stats["arbs_executed"] += 1
             if self.executor.is_circuit_breaker_tripped():
                 await self._emergency_shutdown()
@@ -382,12 +400,19 @@ class ArbBot:
                         except (ValueError, TypeError):
                             pass
 
+            capital_info = ""
+            if self.cfg.capital_budgets.get(self.cfg.exchange):
+                capital_info = (
+                    f" | capital_deployed=${self.capital_guard.deployed(self.cfg.exchange):.2f}"
+                    f" | capital_headroom=${self.capital_guard.headroom(self.cfg.exchange):.2f}"
+                )
+
             logger.info(
                 "STATUS | uptime=%.0fs | events=%d | arbs_detected=%d | "
                 "arbs_executed=%d | arbs_failed=%d | theoretical_profit=$%.4f | "
                 "open_positions=%d | unrealized_premium=$%.4f | "
                 "realized_pnl=$%.4f | session_loss=$%.4f | circuit_breaker=%s | "
-                "maker_events=%d | maker_horizon=%d",
+                "maker_events=%d | maker_horizon=%d%s",
                 uptime,
                 len(self.discovery.event_tickers),
                 self._stats["arbs_detected"],
@@ -401,6 +426,7 @@ class ArbBot:
                 cb_status,
                 maker_count,
                 maker_horizon_events,
+                capital_info,
             )
 
     async def _boot_reconcile(self):
