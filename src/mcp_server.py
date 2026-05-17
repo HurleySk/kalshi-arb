@@ -189,6 +189,18 @@ async def get_risk_profile() -> str:
     if cfg.strategy_overrides:
         lines.append(f"\nOverrides applied: {cfg.strategy_overrides}")
 
+    import yaml
+    with open(CONFIG_PATH) as f:
+        raw_cfg = yaml.safe_load(f)
+    capital_budget_raw = raw_cfg.get("capital_budget", {})
+    if capital_budget_raw:
+        lines.append(f"\nCapital budgets:")
+        for exchange, budget in capital_budget_raw.items():
+            if budget and float(budget) > 0:
+                lines.append(f"  {exchange}: ${float(budget):.2f}")
+    else:
+        lines.append(f"\nCapital budgets: unlimited (none configured)")
+
     return "\n".join(lines)
 
 
