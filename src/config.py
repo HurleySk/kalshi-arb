@@ -1,7 +1,9 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 DEMO_REST_URL = "https://external-api.demo.kalshi.co/trade-api/v2"
 DEMO_WS_URL = "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
@@ -44,13 +46,19 @@ class Config:
     cleanup_interval_secs: int
     log_max_file_size_mb: int
     log_max_backup_count: int
+    predictit_proxy_url: str | None = None
+    predictit_session_dir: str = "~/.kalshi/predictit_session"
+    predictit_headless: bool = True
+    predictit_include_withdrawal_fee: bool = True
+    predictit_poll_interval_secs: int = 60
 
 
 def load_config(path: str) -> Config:
+    load_dotenv()
     with open(path) as f:
         raw = yaml.safe_load(f)
 
-    for key in ("mode", "credentials", "strategy"):
+    for key in ("mode", "strategy"):
         if key not in raw:
             raise ValueError(f"Missing required config key: {key!r}")
 
@@ -59,24 +67,49 @@ def load_config(path: str) -> Config:
         raise ValueError(f"Invalid mode: {mode!r}. Must be 'demo' or 'live'.")
 
     exchange = raw.get("exchange", "kalshi")
+    valid_exchanges = ("kalshi", "predictit")
+    if exchange not in valid_exchanges:
+        raise ValueError(f"Invalid exchange: {exchange!r}. Must be one of {valid_exchanges}.")
 
-    creds_section = raw["credentials"]
-    if exchange in creds_section and isinstance(creds_section[exchange], dict):
-        if mode not in creds_section[exchange]:
-            raise ValueError(f"No credentials for exchange {exchange!r} mode {mode!r}")
-        creds = creds_section[exchange][mode]
-    elif mode in creds_section:
-        creds = creds_section[mode]
+    if exchange == "kalshi":
+        if "credentials" not in raw:
+            raise ValueError("Missing required config key: 'credentials'")
+        creds_section = raw["credentials"]
+        if exchange in creds_section and isinstance(creds_section[exchange], dict):
+            if mode not in creds_section[exchange]:
+                raise ValueError(f"No credentials for exchange {exchange!r} mode {mode!r}")
+            creds = creds_section[exchange][mode]
+        elif mode in creds_section:
+            creds = creds_section[mode]
+        else:
+            raise ValueError(f"No credentials for mode {mode!r}")
+        for key in ("api_key_id", "private_key_path"):
+            if key not in creds:
+                raise ValueError(f"Missing credential: {key!r} for mode {mode!r}")
     else:
-        raise ValueError(f"No credentials for mode {mode!r}")
-    for key in ("api_key_id", "private_key_path"):
-        if key not in creds:
-            raise ValueError(f"Missing credential: {key!r} for mode {mode!r}")
+        creds = {}
 
-    rest_url, ws_url = URLS[mode]
+    api_key_id = creds.get("api_key_id", "")
+    private_key_path = (
+        Path(creds["private_key_path"]).expanduser()
+        if creds.get("private_key_path")
+        else Path("/dev/null")
+    )
+    url_pair = URLS.get(mode, ("", ""))
+    rest_url, ws_url = url_pair
     strategy = raw["strategy"]
     logging_cfg = raw.get("logging", {})
     recording_cfg = raw.get("recording", {})
+
+    pi_cfg = raw.get("predictit", {})
+    predictit_proxy_url = os.environ.get("DECODO_PROXY_URL") or pi_cfg.get("proxy_url")
+    predictit_session_dir = (
+        os.environ.get("PREDICTIT_SESSION_DIR")
+        or pi_cfg.get("session_dir", "~/.kalshi/predictit_session")
+    )
+    predictit_headless = pi_cfg.get("headless", True)
+    predictit_include_withdrawal_fee = pi_cfg.get("include_withdrawal_fee", True)
+    predictit_poll_interval_secs = int(pi_cfg.get("poll_interval_secs", 60))
 
     risk_mode = strategy.get("risk_mode", "conservative")
     override_keys = {
@@ -92,8 +125,8 @@ def load_config(path: str) -> Config:
     return Config(
         mode=mode,
         exchange=exchange,
-        api_key_id=creds["api_key_id"],
-        private_key_path=Path(creds["private_key_path"]).expanduser(),
+        api_key_id=api_key_id,
+        private_key_path=private_key_path,
         rest_base_url=rest_url,
         ws_url=ws_url,
         risk_mode=risk_mode,
@@ -118,4 +151,9 @@ def load_config(path: str) -> Config:
         cleanup_interval_secs=max(60, int(recording_cfg.get("cleanup_interval_secs", 1800))),
         log_max_file_size_mb=max(1, int(logging_cfg.get("max_file_size_mb", 5))),
         log_max_backup_count=max(1, int(logging_cfg.get("max_backup_count", 5))),
+        predictit_proxy_url=predictit_proxy_url,
+        predictit_session_dir=predictit_session_dir,
+        predictit_headless=predictit_headless,
+        predictit_include_withdrawal_fee=predictit_include_withdrawal_fee,
+        predictit_poll_interval_secs=predictit_poll_interval_secs,
     )
