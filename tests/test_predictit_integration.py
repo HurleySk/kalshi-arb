@@ -80,7 +80,6 @@ def test_create_discovery():
     assert hasattr(discovery, "event_total_markets")
 
 
-import asyncio
 from unittest.mock import MagicMock, patch
 
 from src.core.orderbook_manager import OrderbookManager

@@ -548,7 +548,10 @@ class ArbBot:
             self.recorder.close()
             self._print_summary()
             await self.scanner.close()
-            await self.api.close()
+            if hasattr(self.exchange, 'close'):
+                await self.exchange.close()
+            else:
+                await self.api.close()
 
     async def _snapshot_loop(self):
         interval = self.cfg.recording_snapshot_interval_secs

@@ -67,6 +67,9 @@ def load_config(path: str) -> Config:
         raise ValueError(f"Invalid mode: {mode!r}. Must be 'demo' or 'live'.")
 
     exchange = raw.get("exchange", "kalshi")
+    valid_exchanges = ("kalshi", "predictit")
+    if exchange not in valid_exchanges:
+        raise ValueError(f"Invalid exchange: {exchange!r}. Must be one of {valid_exchanges}.")
 
     if exchange == "kalshi":
         if "credentials" not in raw:

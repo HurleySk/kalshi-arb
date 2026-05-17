@@ -86,3 +86,9 @@ recording:
 #   include_withdrawal_fee: true     # Include 5% withdrawal fee in profit calculations
 #   min_profit_pct: 5.0             # Higher than Kalshi due to 60s data staleness
 #   execution_timeout_secs: 30      # Browser actions are slower than REST
+#
+# NOTE: PredictIt's JSON endpoint provides only best bid/ask (no depth data).
+# Synthetic orderbooks have depth=1 at each level. You MUST override depth
+# filters or use aggressive risk mode, otherwise all signals get rejected:
+#   min_bid_depth: 1
+#   min_ask_depth: 1

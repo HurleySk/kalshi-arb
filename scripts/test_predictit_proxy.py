@@ -7,10 +7,8 @@ Usage:
 Requires DECODO_PROXY_URL set in .env file.
 """
 import asyncio
-import json
 import os
 import sys
-import time
 
 from dotenv import load_dotenv
 
@@ -49,7 +47,7 @@ async def main():
         sys.exit(1)
 
     print("\n--- Fetch 2: Testing rate limit (waiting 65s) ---")
-    time.sleep(65)
+    await asyncio.sleep(65)
     try:
         data2 = await scraper.fetch()
         markets2 = scraper.parse_markets(data2)
@@ -60,7 +58,7 @@ async def main():
         sys.exit(1)
 
     print("\n--- Fetch 3: Testing rapid retry (should work with proxy rotation) ---")
-    time.sleep(5)
+    await asyncio.sleep(5)
     try:
         data3 = await scraper.fetch()
         markets3 = scraper.parse_markets(data3)
