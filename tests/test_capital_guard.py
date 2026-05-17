@@ -68,3 +68,21 @@ def test_multiple_exchanges_independent():
     assert guard.can_execute("kalshi", 5.0)
     assert not guard.can_execute("kalshi", 6.0)
     assert guard.can_execute("predictit", 20.0)
+
+
+def test_release_all_clears_exchange():
+    guard = CapitalGuard(budgets={"kalshi": 25.0})
+    guard.commit("kalshi", "order1", 10.0)
+    guard.commit("kalshi", "order2", 5.0)
+    guard.release_all("kalshi")
+    assert guard.deployed("kalshi") == 0.0
+    assert guard.headroom("kalshi") == 25.0
+
+
+def test_release_all_only_affects_specified_exchange():
+    guard = CapitalGuard(budgets={"kalshi": 25.0, "predictit": 50.0})
+    guard.commit("kalshi", "k1", 10.0)
+    guard.commit("predictit", "p1", 20.0)
+    guard.release_all("kalshi")
+    assert guard.deployed("kalshi") == 0.0
+    assert guard.deployed("predictit") == 20.0

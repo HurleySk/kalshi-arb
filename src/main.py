@@ -370,11 +370,7 @@ class ArbBot:
                     logger.info("Sent %d close orders", len(close_orders))
                 else:
                     logger.info("No positions to close")
-                for mp in positions_resp.get("market_positions", []):
-                    ticker = mp["ticker"]
-                    if not self.reservations.is_reserved(ticker):
-                        self.capital_guard.release(self.cfg.exchange, f"boot_{ticker}")
-                        self.capital_guard.release(self.cfg.exchange, f"taker_{ticker}")
+                self.capital_guard.release_all(self.cfg.exchange)
                 return
             except (asyncio.TimeoutError, Exception):
                 if attempt == max_retries - 1:

@@ -29,6 +29,11 @@ class CapitalGuard:
             return float("inf")
         return budget - self.deployed(exchange)
 
+    def release_all(self, exchange: str) -> None:
+        """Release all committed capital for an exchange (emergency shutdown)."""
+        if exchange in self._ledger:
+            self._ledger[exchange].clear()
+
     def deployed(self, exchange: str) -> float:
         if exchange not in self._ledger:
             return 0.0
