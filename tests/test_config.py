@@ -332,3 +332,36 @@ def test_capital_budgets_zero_and_negative_filtered():
         assert cfg.capital_budgets == {"kalshi": 25.0}
     finally:
         os.unlink(path)
+
+
+def test_maker_order_ttl_secs_default(tmp_path):
+    """maker_order_ttl_secs defaults to 300 when not specified."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+mode: demo
+credentials:
+  demo:
+    api_key_id: test
+    private_key_path: /dev/null
+strategy:
+  risk_mode: conservative
+""")
+    cfg = load_config(str(config_file))
+    assert cfg.maker_order_ttl_secs == 300
+
+
+def test_maker_order_ttl_secs_override(tmp_path):
+    """maker_order_ttl_secs can be overridden in config."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+mode: demo
+credentials:
+  demo:
+    api_key_id: test
+    private_key_path: /dev/null
+strategy:
+  risk_mode: conservative
+  maker_order_ttl_secs: 600
+""")
+    cfg = load_config(str(config_file))
+    assert cfg.maker_order_ttl_secs == 600
