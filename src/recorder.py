@@ -15,7 +15,6 @@ batches for performance.
 import asyncio
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -189,24 +188,27 @@ class DataRecorder:
     # Retention — row-level pruning
     # ------------------------------------------------------------------
 
+    def _used_bytes(self) -> int:
+        """Return actual used bytes via DuckDB's internal block accounting."""
+        row = self._conn.execute("CALL pragma_database_size()").fetchone()
+        # (db_name, db_size, block_size, total_blocks, used_blocks, free_blocks, ...)
+        block_size, used_blocks = row[2], row[4]
+        return used_blocks * block_size
+
     def cleanup_old_sessions(self) -> dict | None:
-        """Delete oldest sessions' rows until DB file is under size cap."""
+        """Delete oldest sessions' rows until used space is under size cap."""
         if not self._enabled or not self._db_path or not self._conn:
             return None
 
-        try:
-            total_bytes = os.path.getsize(self._db_path)
-        except OSError:
-            return None
-
+        used_bytes = self._used_bytes()
         cap_bytes = self._max_total_size_mb * 1024 * 1024
-        if total_bytes <= cap_bytes:
+        if used_bytes <= cap_bytes:
             return None
 
-        before_mb = total_bytes / (1024 * 1024)
+        before_mb = used_bytes / (1024 * 1024)
         deleted_sessions: list[int] = []
 
-        while total_bytes > cap_bytes:
+        while used_bytes > cap_bytes:
             row = self._conn.execute(
                 "SELECT id FROM sessions WHERE id != ? ORDER BY start_time ASC LIMIT 1",
                 [self._session_id or -1],
@@ -226,17 +228,14 @@ class DataRecorder:
             deleted_sessions.append(sid)
 
             self._conn.execute("CHECKPOINT")
-            try:
-                total_bytes = os.path.getsize(self._db_path)
-            except OSError:
-                break
+            used_bytes = self._used_bytes()
 
         if not deleted_sessions:
             return None
 
-        after_mb = total_bytes / (1024 * 1024)
+        after_mb = used_bytes / (1024 * 1024)
         logger.info(
-            "Session cleanup: pruned %d session(s). Size: %.1f MB → %.1f MB",
+            "Session cleanup: pruned %d session(s). Used: %.1f MB → %.1f MB",
             len(deleted_sessions), before_mb, after_mb,
         )
         return {
@@ -250,8 +249,7 @@ class DataRecorder:
         while True:
             await asyncio.sleep(interval_secs)
             try:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self.cleanup_old_sessions)
+                self.cleanup_old_sessions()
             except Exception:
                 logger.exception("Session cleanup failed, will retry next cycle")
 

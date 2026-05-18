@@ -18,11 +18,6 @@ CONFIG_PATH = "config.yaml"
 
 def _db_kwargs(cfg) -> dict:
     """Build kwargs for Analytics/ReplayEngine from config."""
-    session_dir = getattr(cfg, "recording_session_dir", None)
-    if session_dir and cfg.recording_enabled:
-        import os
-        if os.path.isdir(session_dir):
-            return {"session_dir": session_dir}
     db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.duckdb"
     return {"db_path": db_path}
 
@@ -342,14 +337,10 @@ async def get_signal_history(
 
     where = " AND ".join(conditions)
     sql = f"SELECT ts, event_ticker, strategy, outcome, bid_sum, profit_pct FROM signal_evaluations WHERE {where} ORDER BY ts DESC LIMIT ?"
-    if "session_dir" in kwargs:
-        from src.session_reader import SessionReader
-        rows = SessionReader(kwargs["session_dir"]).query_across(sql, tuple(params + [limit]), start=start, end=end)
-    else:
-        db_path = kwargs.get("db_path", "data/arb_history.duckdb")
-        conn = duckdb.connect(db_path, read_only=True)
-        rows = conn.execute(sql, params + [limit]).fetchall()
-        conn.close()
+    db_path = kwargs.get("db_path", "data/arb_history.duckdb")
+    conn = duckdb.connect(db_path, read_only=True)
+    rows = conn.execute(sql, params + [limit]).fetchall()
+    conn.close()
 
     lines = [f"Signal History (last {days} day(s), {strategy}/{outcome})", "-" * 70]
     for ts, event, strat, out, bid_sum, profit_pct in rows:

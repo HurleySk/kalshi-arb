@@ -72,20 +72,31 @@ class Analytics:
     def _tuples_to_dicts(self, sql: str, rows: list[tuple]) -> list[dict]:
         """Convert tuples from SessionReader to dicts using column names from SQL aliases."""
         import re
-        # Extract column aliases from SELECT clause
         select_match = re.search(r'SELECT\s+(.*?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
         if not select_match:
             return [dict(enumerate(r)) for r in rows]
         select_clause = select_match.group(1)
+        # Parenthesis-aware split on commas
+        parts: list[str] = []
+        depth, current = 0, []
+        for ch in select_clause:
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            elif ch == ',' and depth == 0:
+                parts.append(''.join(current).strip())
+                current = []
+                continue
+            current.append(ch)
+        if current:
+            parts.append(''.join(current).strip())
         cols: list[str] = []
-        for part in select_clause.split(','):
-            part = part.strip()
-            # Check for AS alias
+        for part in parts:
             as_match = re.search(r'\bAS\s+(\w+)\s*$', part, re.IGNORECASE)
             if as_match:
                 cols.append(as_match.group(1))
             else:
-                # Use the last identifier (handles "table.column" and plain "column")
                 ident = part.split('.')[-1].strip()
                 cols.append(ident)
         return [dict(zip(cols, row)) for row in rows]
