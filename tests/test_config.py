@@ -134,7 +134,7 @@ strategy:
 """)
     cfg = load_config(str(cfg_file))
     assert cfg.recording_enabled is True
-    assert cfg.recording_db_path == "data/arb_history.db"
+    assert cfg.recording_db_path == "data/arb_history.duckdb"
     assert cfg.recording_snapshot_interval_secs == 5
     assert cfg.recording_balance_poll_interval_secs == 300
 

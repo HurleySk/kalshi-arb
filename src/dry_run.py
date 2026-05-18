@@ -4,8 +4,8 @@ ExecutionManager with a SimulatedAPI to catch race conditions, position
 tracker bugs, and fill dedup failures without risking real money.
 
 Usage:
-    python3 -m src.dry_run --db data/arb_history.db
-    python3 -m src.dry_run --db data/arb_history.db --partial-fill-rate 0.2 --ws-race-rate 0.5
+    python3 -m src.dry_run --db data/arb_history.duckdb
+    python3 -m src.dry_run --db data/arb_history.duckdb --partial-fill-rate 0.2 --ws-race-rate 0.5
 """
 
 import argparse
@@ -150,7 +150,7 @@ def _print_report(report: dict):
 
 async def _main():
     parser = argparse.ArgumentParser(description="Dry-run replay with fault injection")
-    parser.add_argument("--db", default="data/arb_history.db")
+    parser.add_argument("--db", default="data/arb_history.duckdb")
     parser.add_argument("--risk-mode", default="conservative")
     parser.add_argument("--partial-fill-rate", type=float, default=0.0)
     parser.add_argument("--ws-race-rate", type=float, default=0.0)

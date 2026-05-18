@@ -1,151 +1,150 @@
 """
-DataRecorder — SQLite-backed recorder for bot sessions, signals, executions,
+DataRecorder — DuckDB-backed recorder for bot sessions, signals, executions,
 fills, balances, and orderbook snapshots.
 
 Usage:
-    rec = DataRecorder("/path/to/bot.db")   # live recording
-    rec = DataRecorder(None)                 # no-op (disabled)
+    rec = DataRecorder("/path/to/bot.duckdb")   # live recording
+    rec = DataRecorder(None)                     # no-op (disabled)
 
 All record_* methods silently no-op when the recorder is disabled or no
-session is active.  Writes are committed after each insert for durability.
+session is active.  Low-frequency writes (signals, executions, fills, balances)
+are committed immediately.  Orderbook snapshots are buffered and flushed in
+batches for performance.
 """
 
 import asyncio
 import json
 import logging
 import os
-import sqlite3
 import time
 from pathlib import Path
 from typing import Any
 
+import duckdb
+
 logger = logging.getLogger("kalshi-arb")
 
 
-_CREATE_SESSIONS = """
-CREATE TABLE IF NOT EXISTS sessions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    start_time  REAL    NOT NULL,
-    end_time    REAL,
-    config_json TEXT
-);
-"""
+_DDL_STATEMENTS: list[str] = [
+    # Sequences
+    "CREATE SEQUENCE IF NOT EXISTS sessions_id_seq",
+    "CREATE SEQUENCE IF NOT EXISTS signal_evaluations_id_seq",
+    "CREATE SEQUENCE IF NOT EXISTS executions_id_seq",
+    "CREATE SEQUENCE IF NOT EXISTS fills_id_seq",
+    "CREATE SEQUENCE IF NOT EXISTS balances_id_seq",
+    "CREATE SEQUENCE IF NOT EXISTS orderbook_snapshots_id_seq",
 
-_CREATE_SIGNAL_EVALUATIONS = """
-CREATE TABLE IF NOT EXISTS signal_evaluations (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id     INTEGER NOT NULL REFERENCES sessions(id),
-    ts             REAL    NOT NULL,
-    event_ticker   TEXT    NOT NULL,
-    strategy       TEXT    NOT NULL,
-    outcome        TEXT    NOT NULL,
-    reject_reason  TEXT,
-    bid_sum        REAL,
-    ask_sum        REAL,
-    profit_pct     REAL,
-    exposure_ratio REAL,
-    legs_json      TEXT,
-    metadata_json  TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_se_session   ON signal_evaluations(session_id);
-CREATE INDEX IF NOT EXISTS idx_se_event     ON signal_evaluations(event_ticker);
-CREATE INDEX IF NOT EXISTS idx_se_strategy  ON signal_evaluations(strategy);
-CREATE INDEX IF NOT EXISTS idx_se_ts        ON signal_evaluations(ts);
-"""
+    # Tables
+    """CREATE TABLE IF NOT EXISTS sessions (
+        id          INTEGER PRIMARY KEY DEFAULT(nextval('sessions_id_seq')),
+        start_time  DOUBLE NOT NULL,
+        end_time    DOUBLE,
+        config_json VARCHAR
+    )""",
 
-_CREATE_EXECUTIONS = """
-CREATE TABLE IF NOT EXISTS executions (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id     INTEGER NOT NULL REFERENCES sessions(id),
-    ts             REAL    NOT NULL,
-    event_ticker   TEXT    NOT NULL,
-    strategy       TEXT    NOT NULL,
-    result         TEXT    NOT NULL,
-    legs_json      TEXT,
-    fill_details_json TEXT,
-    unwind_cost    REAL
-);
-CREATE INDEX IF NOT EXISTS idx_ex_session  ON executions(session_id);
-CREATE INDEX IF NOT EXISTS idx_ex_event    ON executions(event_ticker);
-CREATE INDEX IF NOT EXISTS idx_ex_ts       ON executions(ts);
-"""
+    """CREATE TABLE IF NOT EXISTS signal_evaluations (
+        id             INTEGER PRIMARY KEY DEFAULT(nextval('signal_evaluations_id_seq')),
+        session_id     INTEGER NOT NULL,
+        ts             DOUBLE NOT NULL,
+        event_ticker   VARCHAR NOT NULL,
+        strategy       VARCHAR NOT NULL,
+        outcome        VARCHAR NOT NULL,
+        reject_reason  VARCHAR,
+        bid_sum        DOUBLE,
+        ask_sum        DOUBLE,
+        profit_pct     DOUBLE,
+        exposure_ratio DOUBLE,
+        legs_json      VARCHAR,
+        metadata_json  VARCHAR
+    )""",
 
-_CREATE_FILLS = """
-CREATE TABLE IF NOT EXISTS fills (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id   INTEGER NOT NULL REFERENCES sessions(id),
-    ts           REAL    NOT NULL,
-    ticker       TEXT    NOT NULL,
-    side         TEXT    NOT NULL,
-    action       TEXT    NOT NULL,
-    price        REAL    NOT NULL,
-    quantity     INTEGER NOT NULL,
-    realized_pnl REAL
-);
-CREATE INDEX IF NOT EXISTS idx_fills_session ON fills(session_id);
-CREATE INDEX IF NOT EXISTS idx_fills_ticker  ON fills(ticker);
-CREATE INDEX IF NOT EXISTS idx_fills_ts      ON fills(ts);
-"""
+    """CREATE TABLE IF NOT EXISTS executions (
+        id               INTEGER PRIMARY KEY DEFAULT(nextval('executions_id_seq')),
+        session_id       INTEGER NOT NULL,
+        ts               DOUBLE NOT NULL,
+        event_ticker     VARCHAR NOT NULL,
+        strategy         VARCHAR NOT NULL,
+        result           VARCHAR NOT NULL,
+        legs_json        VARCHAR,
+        fill_details_json VARCHAR,
+        unwind_cost      DOUBLE
+    )""",
 
-_CREATE_BALANCES = """
-CREATE TABLE IF NOT EXISTS balances (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id       INTEGER NOT NULL REFERENCES sessions(id),
-    ts               REAL    NOT NULL,
-    cash_cents       INTEGER NOT NULL,
-    portfolio_cents  INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_bal_session ON balances(session_id);
-CREATE INDEX IF NOT EXISTS idx_bal_ts      ON balances(ts);
-"""
+    """CREATE TABLE IF NOT EXISTS fills (
+        id           INTEGER PRIMARY KEY DEFAULT(nextval('fills_id_seq')),
+        session_id   INTEGER NOT NULL,
+        ts           DOUBLE NOT NULL,
+        ticker       VARCHAR NOT NULL,
+        side         VARCHAR NOT NULL,
+        action       VARCHAR NOT NULL,
+        price        DOUBLE NOT NULL,
+        quantity     INTEGER NOT NULL,
+        realized_pnl DOUBLE
+    )""",
 
-_CREATE_ORDERBOOK_SNAPSHOTS = """
-CREATE TABLE IF NOT EXISTS orderbook_snapshots (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id     INTEGER NOT NULL REFERENCES sessions(id),
-    ts             REAL    NOT NULL,
-    event_ticker   TEXT    NOT NULL,
-    market_ticker  TEXT    NOT NULL,
-    yes_bids_json  TEXT,
-    no_bids_json   TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_obs_session ON orderbook_snapshots(session_id);
-CREATE INDEX IF NOT EXISTS idx_obs_market  ON orderbook_snapshots(market_ticker);
-CREATE INDEX IF NOT EXISTS idx_obs_ts      ON orderbook_snapshots(ts);
-"""
+    """CREATE TABLE IF NOT EXISTS balances (
+        id              INTEGER PRIMARY KEY DEFAULT(nextval('balances_id_seq')),
+        session_id      INTEGER NOT NULL,
+        ts              DOUBLE NOT NULL,
+        cash_cents      INTEGER NOT NULL,
+        portfolio_cents INTEGER NOT NULL
+    )""",
+
+    """CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+        id             INTEGER PRIMARY KEY DEFAULT(nextval('orderbook_snapshots_id_seq')),
+        session_id     INTEGER NOT NULL,
+        ts             DOUBLE NOT NULL,
+        event_ticker   VARCHAR NOT NULL,
+        market_ticker  VARCHAR NOT NULL,
+        yes_bids_json  VARCHAR,
+        no_bids_json   VARCHAR
+    )""",
+
+    # Indexes
+    "CREATE INDEX IF NOT EXISTS idx_se_session   ON signal_evaluations(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_se_event     ON signal_evaluations(event_ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_se_strategy  ON signal_evaluations(strategy)",
+    "CREATE INDEX IF NOT EXISTS idx_se_ts        ON signal_evaluations(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_ex_session   ON executions(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ex_event     ON executions(event_ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_ex_ts        ON executions(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_fills_session ON fills(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_fills_ticker  ON fills(ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_fills_ts      ON fills(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_bal_session   ON balances(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_bal_ts        ON balances(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_obs_session   ON orderbook_snapshots(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_obs_market    ON orderbook_snapshots(market_ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_obs_ts        ON orderbook_snapshots(ts)",
+]
 
 
 class DataRecorder:
-    """SQLite-backed recorder.
+    """DuckDB-backed recorder.
 
-    Two modes:
-    - session_dir mode: each session creates a new DB file in the directory.
-      Cleanup is instant (rm old files). Pass session_dir="/path/to/dir".
-    - legacy mode: single DB file. Pass db_path="/path/to/file.db".
-    - disabled: pass both as None.
+    Single-file mode: all sessions share one DuckDB file.  Cleanup prunes
+    the oldest sessions' rows and checkpoints to reclaim space.
     """
 
     def __init__(
         self,
         db_path: str | None = None,
         max_db_size_mb: int = 5000,
-        session_dir: str | None = None,
+        write_buffer_size: int = 50,
     ) -> None:
-        self._session_dir = session_dir
-        self._enabled = db_path is not None or session_dir is not None
+        self._enabled = db_path is not None
         self._session_id: int | None = None
-        self._conn: sqlite3.Connection | None = None
-        self._db_path: str | None = None
+        self._conn: duckdb.DuckDBPyConnection | None = None
+        self._db_path: str | None = db_path
         self._max_total_size_mb = max_db_size_mb
+        self._snapshot_buffer: list[tuple] = []
+        self._buffer_size = write_buffer_size
+        self._last_flush = time.time()
+        self._flush_interval = 5.0
 
-        if session_dir:
-            Path(session_dir).mkdir(parents=True, exist_ok=True)
-        elif db_path and self._enabled:
-            self._db_path = db_path
+        if db_path and self._enabled:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(db_path, check_same_thread=False)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._conn = duckdb.connect(db_path)
             self._init_schema()
 
     # ------------------------------------------------------------------
@@ -154,17 +153,8 @@ class DataRecorder:
 
     def _init_schema(self) -> None:
         assert self._conn is not None
-        for ddl in (
-            _CREATE_SESSIONS,
-            _CREATE_SIGNAL_EVALUATIONS,
-            _CREATE_EXECUTIONS,
-            _CREATE_FILLS,
-            _CREATE_BALANCES,
-            _CREATE_ORDERBOOK_SNAPSHOTS,
-        ):
-            # Each DDL block may contain multiple statements; executescript
-            # handles semicolon separation and commits automatically.
-            self._conn.executescript(ddl)
+        for ddl in _DDL_STATEMENTS:
+            self._conn.execute(ddl)
 
     # ------------------------------------------------------------------
     # Session management
@@ -175,22 +165,12 @@ class DataRecorder:
         if not self._enabled:
             return None
 
-        if self._session_dir:
-            ts = time.time()
-            db_file = Path(self._session_dir) / f"session_{ts:.6f}.db"
-            self._db_path = str(db_file)
-            self._conn = sqlite3.connect(str(db_file), check_same_thread=False)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-            self._init_schema()
-
         assert self._conn is not None
-        cur = self._conn.execute(
-            "INSERT INTO sessions (start_time, end_time, config_json) VALUES (?, NULL, ?)",
-            (time.time(), json.dumps(config)),
+        result = self._conn.execute(
+            "INSERT INTO sessions (start_time, end_time, config_json) VALUES (?, NULL, ?) RETURNING id",
+            [time.time(), json.dumps(config)],
         )
-        self._conn.commit()
-        self._session_id = cur.lastrowid
+        self._session_id = result.fetchone()[0]
         return self._session_id
 
     def end_session(self) -> None:
@@ -198,69 +178,98 @@ class DataRecorder:
         if not self._enabled or self._session_id is None:
             return
         assert self._conn is not None
+        self._flush_snapshots()
         self._conn.execute(
             "UPDATE sessions SET end_time = ? WHERE id = ?",
-            (time.time(), self._session_id),
+            [time.time(), self._session_id],
         )
-        self._conn.commit()
         self._session_id = None
 
     # ------------------------------------------------------------------
-    # Retention
+    # Retention — row-level pruning
     # ------------------------------------------------------------------
 
-    def cleanup_old_files(self) -> dict | None:
-        """Delete oldest session files until total size is under cap. Instant via os.unlink."""
-        if not self._session_dir:
+    def cleanup_old_sessions(self) -> dict | None:
+        """Delete oldest sessions' rows until DB file is under size cap."""
+        if not self._enabled or not self._db_path or not self._conn:
             return None
 
-        import glob as _glob
-        pattern = str(Path(self._session_dir) / "session_*.db*")
-        files = sorted(_glob.glob(pattern))
+        try:
+            total_bytes = os.path.getsize(self._db_path)
+        except OSError:
+            return None
 
-        total_bytes = sum(os.path.getsize(f) for f in files)
         cap_bytes = self._max_total_size_mb * 1024 * 1024
         if total_bytes <= cap_bytes:
             return None
 
         before_mb = total_bytes / (1024 * 1024)
-        deleted_files: list[str] = []
-        current = str(self._db_path) if self._db_path else ""
+        deleted_sessions: list[int] = []
 
-        session_groups: dict[str, list[str]] = {}
-        for f in files:
-            base = f.split("-wal")[0].split("-shm")[0]
-            session_groups.setdefault(base, []).append(f)
-
-        for base in sorted(session_groups.keys()):
-            if total_bytes <= cap_bytes:
+        while total_bytes > cap_bytes:
+            row = self._conn.execute(
+                "SELECT id FROM sessions WHERE id != ? ORDER BY start_time ASC LIMIT 1",
+                [self._session_id or -1],
+            ).fetchone()
+            if row is None:
                 break
-            if base == current or base == current.split("-wal")[0]:
-                continue
-            for f in session_groups[base]:
-                sz = os.path.getsize(f)
-                os.unlink(f)
-                total_bytes -= sz
-                deleted_files.append(f)
+            sid = row[0]
 
-        if not deleted_files:
+            for table in (
+                "orderbook_snapshots", "signal_evaluations",
+                "executions", "fills", "balances",
+            ):
+                self._conn.execute(
+                    f"DELETE FROM {table} WHERE session_id = ?", [sid]
+                )
+            self._conn.execute("DELETE FROM sessions WHERE id = ?", [sid])
+            deleted_sessions.append(sid)
+
+            self._conn.execute("CHECKPOINT")
+            try:
+                total_bytes = os.path.getsize(self._db_path)
+            except OSError:
+                break
+
+        if not deleted_sessions:
             return None
 
         after_mb = total_bytes / (1024 * 1024)
-        logger.info("Session cleanup: deleted %d file(s). Size: %.1f MB → %.1f MB",
-                     len(deleted_files), before_mb, after_mb)
-        return {"deleted": deleted_files, "before_mb": round(before_mb, 1), "after_mb": round(after_mb, 1)}
+        logger.info(
+            "Session cleanup: pruned %d session(s). Size: %.1f MB → %.1f MB",
+            len(deleted_sessions), before_mb, after_mb,
+        )
+        return {
+            "deleted_sessions": deleted_sessions,
+            "before_mb": round(before_mb, 1),
+            "after_mb": round(after_mb, 1),
+        }
 
     async def cleanup_loop(self, interval_secs: float = 1800) -> None:
-        """Periodically clean up old session files."""
+        """Periodically prune old sessions to stay under size cap."""
         while True:
             await asyncio.sleep(interval_secs)
             try:
-                if self._session_dir:
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, self.cleanup_old_files)
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self.cleanup_old_sessions)
             except Exception:
                 logger.exception("Session cleanup failed, will retry next cycle")
+
+    # ------------------------------------------------------------------
+    # Snapshot write buffer
+    # ------------------------------------------------------------------
+
+    def _flush_snapshots(self) -> None:
+        if not self._snapshot_buffer or not self._conn:
+            return
+        self._conn.executemany(
+            """INSERT INTO orderbook_snapshots
+                (session_id, ts, event_ticker, market_ticker, yes_bids_json, no_bids_json)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            self._snapshot_buffer,
+        )
+        self._snapshot_buffer.clear()
+        self._last_flush = time.time()
 
     # ------------------------------------------------------------------
     # Record helpers (all guard on _enabled and _session_id)
@@ -290,7 +299,7 @@ class DataRecorder:
                  bid_sum, ask_sum, profit_pct, exposure_ratio, legs_json, metadata_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
+            [
                 self._session_id,
                 time.time(),
                 event_ticker,
@@ -303,9 +312,8 @@ class DataRecorder:
                 exposure_ratio,
                 json.dumps(legs) if legs is not None else None,
                 json.dumps(metadata) if metadata is not None else None,
-            ),
+            ],
         )
-        self._conn.commit()
 
     def record_execution(
         self,
@@ -327,7 +335,7 @@ class DataRecorder:
                  legs_json, fill_details_json, unwind_cost)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
+            [
                 self._session_id,
                 time.time(),
                 event_ticker,
@@ -336,9 +344,8 @@ class DataRecorder:
                 json.dumps(legs),
                 json.dumps(fill_details) if fill_details is not None else None,
                 unwind_cost,
-            ),
+            ],
         )
-        self._conn.commit()
 
     def record_fill(
         self,
@@ -359,7 +366,7 @@ class DataRecorder:
                 (session_id, ts, ticker, side, action, price, quantity, realized_pnl)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
+            [
                 self._session_id,
                 time.time(),
                 ticker,
@@ -368,9 +375,8 @@ class DataRecorder:
                 price,
                 quantity,
                 realized_pnl,
-            ),
+            ],
         )
-        self._conn.commit()
 
     def record_balance(self, *, cash_cents: int, portfolio_cents: int) -> None:
         if not self._enabled or self._session_id is None:
@@ -381,9 +387,8 @@ class DataRecorder:
             INSERT INTO balances (session_id, ts, cash_cents, portfolio_cents)
             VALUES (?, ?, ?, ?)
             """,
-            (self._session_id, time.time(), cash_cents, portfolio_cents),
+            [self._session_id, time.time(), cash_cents, portfolio_cents],
         )
-        self._conn.commit()
 
     def record_orderbook_snapshot(
         self,
@@ -396,22 +401,17 @@ class DataRecorder:
         if not self._enabled or self._session_id is None:
             return
         assert self._conn is not None
-        self._conn.execute(
-            """
-            INSERT INTO orderbook_snapshots
-                (session_id, ts, event_ticker, market_ticker, yes_bids_json, no_bids_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                self._session_id,
-                time.time(),
-                event_ticker,
-                market_ticker,
-                json.dumps({str(k): v for k, v in yes_bids.items()}),
-                json.dumps({str(k): v for k, v in no_bids.items()}),
-            ),
-        )
-        self._conn.commit()
+        self._snapshot_buffer.append((
+            self._session_id,
+            time.time(),
+            event_ticker,
+            market_ticker,
+            json.dumps({str(k): v for k, v in yes_bids.items()}),
+            json.dumps({str(k): v for k, v in no_bids.items()}),
+        ))
+        now = time.time()
+        if len(self._snapshot_buffer) >= self._buffer_size or (now - self._last_flush) > self._flush_interval:
+            self._flush_snapshots()
 
     # ------------------------------------------------------------------
     # Cleanup
@@ -424,5 +424,6 @@ class DataRecorder:
         if self._session_id is not None:
             self.end_session()
         if self._conn is not None:
+            self._flush_snapshots()
             self._conn.close()
             self._conn = None

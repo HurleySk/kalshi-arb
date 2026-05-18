@@ -1,6 +1,7 @@
 import glob
-import sqlite3
 from pathlib import Path
+
+import duckdb
 
 
 class SessionReader:
@@ -8,7 +9,7 @@ class SessionReader:
         self._dir = Path(session_dir)
 
     def find_sessions(self, start: float | None = None, end: float | None = None) -> list[Path]:
-        pattern = str(self._dir / "session_*.db")
+        pattern = str(self._dir / "session_*.duckdb")
         paths = sorted(glob.glob(pattern))
         result = []
         for p in paths:
@@ -23,15 +24,14 @@ class SessionReader:
         return result
 
     def query_across(self, sql: str, params: tuple = (),
-                     start: float | None = None, end: float | None = None) -> list[sqlite3.Row]:
+                     start: float | None = None, end: float | None = None) -> list[tuple]:
         files = self.find_sessions(start=start, end=end)
-        rows: list[sqlite3.Row] = []
+        rows: list[tuple] = []
         for f in files:
             try:
-                conn = sqlite3.connect(str(f), check_same_thread=False)
-                conn.row_factory = sqlite3.Row
-                rows.extend(conn.execute(sql, params).fetchall())
+                conn = duckdb.connect(str(f), read_only=True)
+                rows.extend(conn.execute(sql, list(params)).fetchall())
                 conn.close()
-            except sqlite3.DatabaseError:
+            except duckdb.Error:
                 continue
         return rows

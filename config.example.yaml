@@ -70,12 +70,13 @@ logging:
 
 recording:
   enabled: true                      # Record orderbook snapshots, signals, fills (default: true)
-  session_dir: data/sessions         # Per-session DB files directory (default: data/sessions)
-  db_path: data/arb_history.db       # Legacy single-DB path (used if session_dir doesn't exist)
+  db_path: data/arb_history.duckdb   # DuckDB database file (default: data/arb_history.duckdb)
+  session_dir: data/sessions         # Legacy per-session directory (fallback if db_path absent)
   snapshot_interval_secs: 5          # How often to snapshot each event's orderbooks (default: 5)
   balance_poll_interval_secs: 300    # How often to poll and record balance (default: 300)
-  retention_max_db_size_mb: 5000     # Delete oldest session files when total exceeds this (MB)
+  retention_max_db_size_mb: 5000     # Prune oldest sessions when DB exceeds this (MB)
   cleanup_interval_secs: 1800        # How often to run cleanup during runtime (seconds)
+  write_buffer_size: 50              # Batch orderbook snapshots before flushing (default: 50)
 
 # PredictIt-specific (only used when exchange: predictit)
 # Requires DECODO_PROXY_URL in .env file

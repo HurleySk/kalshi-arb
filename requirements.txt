@@ -9,3 +9,4 @@ playwright>=1.40.0
 python-dotenv>=1.0.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+duckdb>=1.2.0
