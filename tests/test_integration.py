@@ -15,7 +15,7 @@ def test_full_pipeline_detects_and_builds_orders():
     positions = PositionTracker()
 
     api = MagicMock()
-    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker,
         "action": "sell",
         "side": "yes",

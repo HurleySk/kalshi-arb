@@ -24,17 +24,17 @@ def _partial_fill_executor(fill_timeout=0, mode="conservative"):
     })
     api = MagicMock()
     api.unwrap_order = lambda raw: raw.get("order", raw)
-    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
     })
-    api.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    api.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "buy", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
     })
     api.batch_create_orders = AsyncMock(return_value={
         "orders": [
-            {"order": {"order_id": "o1", "ticker": "M1", "status": "resting",
+            {"order": {"order_id": "o1", "ticker": "M1", "status": "cancelled",
                        "yes_price_dollars": "0.4600", "fill_count_fp": "0.00",
                        "action": "sell", "side": "yes", "initial_count_fp": "1.00"}},
             {"order": {"order_id": "o2", "ticker": "M2", "status": "executed",

@@ -146,7 +146,7 @@ class KalshiAPI:
     async def get_orderbook(self, ticker: str) -> dict:
         return await self._get(f"/markets/{ticker}/orderbook")
 
-    def build_sell_order(self, ticker: str, yes_price: float, quantity: int) -> dict:
+    def build_sell_order(self, ticker: str, yes_price: float, quantity: int, **kwargs) -> dict:
         return {
             "ticker": ticker,
             "action": "sell",
@@ -156,7 +156,7 @@ class KalshiAPI:
             "count": quantity,
         }
 
-    def build_buy_order(self, ticker: str, yes_price: float, quantity: int) -> dict:
+    def build_buy_order(self, ticker: str, yes_price: float, quantity: int, **kwargs) -> dict:
         return {
             "ticker": ticker,
             "action": "buy",
