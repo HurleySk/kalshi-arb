@@ -20,17 +20,101 @@ def _make_executor(fill_timeout=0):
     api.batch_cancel_orders = AsyncMock(return_value={})
     order_builder = MagicMock()
     order_builder.unwrap_order = lambda raw: raw.get("order", raw)
-    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker,
         "action": "sell",
         "side": "yes",
         "type": "limit",
         "yes_price": round(yes_price * 100),
         "count": quantity,
+        **kwargs,
+    })
+    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
+        "ticker": ticker,
+        "action": "buy",
+        "side": "yes",
+        "type": "limit",
+        "yes_price": round(yes_price * 100),
+        "count": quantity,
+        **kwargs,
     })
     positions = MagicMock()
     positions.record_fill = MagicMock()
     return ExecutionManager(api=api, order_builder=order_builder, positions=positions, fill_timeout_secs=fill_timeout, timeouts=_FAST_TIMEOUTS), api, positions
+
+
+def test_taker_orders_use_ioc():
+    """Taker orders should include time_in_force=immediate_or_cancel."""
+    executor, api, _ = _make_executor()
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.40), ("M2", 0.35), ("M3", 0.35)],
+        net_profit=0.05, profit_pct=5.0, exposure_ratio=1.5,
+    )
+    orders = executor.build_orders(signal, quantity=1)
+    for order in orders:
+        assert order.get("time_in_force") == "immediate_or_cancel"
+
+
+def test_ioc_full_fill_skips_monitor():
+    """When all IOC orders fill immediately, _monitor_fills should not be called."""
+    executor, api, positions = _make_executor(fill_timeout=30)
+    api.batch_create_orders = AsyncMock(return_value={
+        "orders": [
+            {"order": {"order_id": "o1", "ticker": "M1", "status": "executed",
+                       "yes_price_dollars": "0.40", "fill_count_fp": "1", "side": "yes", "action": "sell"}},
+            {"order": {"order_id": "o2", "ticker": "M2", "status": "executed",
+                       "yes_price_dollars": "0.35", "fill_count_fp": "1", "side": "yes", "action": "sell"}},
+        ]
+    })
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.40), ("M2", 0.35)],
+        net_profit=0.05, profit_pct=5.0, exposure_ratio=1.5,
+    )
+    asyncio.run(executor.execute(signal, quantity=1))
+    assert not executor._executing
+
+
+def test_ioc_partial_fill_triggers_unwind():
+    """When some IOC orders are cancelled by the exchange, trigger unwind for filled legs."""
+    executor, api, positions = _make_executor(fill_timeout=30)
+    api.batch_create_orders = AsyncMock(return_value={
+        "orders": [
+            {"order": {"order_id": "o1", "ticker": "M1", "status": "executed",
+                       "yes_price_dollars": "0.40", "fill_count_fp": "1", "side": "yes", "action": "sell"}},
+            {"order": {"order_id": "o2", "ticker": "M2", "status": "cancelled",
+                       "yes_price_dollars": "0.35", "fill_count_fp": "0", "side": "yes", "action": "sell"}},
+        ]
+    })
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.40), ("M2", 0.35)],
+        net_profit=0.05, profit_pct=5.0, exposure_ratio=1.5,
+    )
+    asyncio.run(executor.execute(signal, quantity=1))
+    assert executor.is_event_blacklisted("E1")
+
+
+def test_ioc_zero_fills_clean():
+    """When all IOC orders are cancelled (arb gone), no unwind needed."""
+    executor, api, positions = _make_executor(fill_timeout=30)
+    api.batch_create_orders = AsyncMock(return_value={
+        "orders": [
+            {"order": {"order_id": "o1", "ticker": "M1", "status": "cancelled",
+                       "yes_price_dollars": "0.40", "fill_count_fp": "0", "side": "yes", "action": "sell"}},
+            {"order": {"order_id": "o2", "ticker": "M2", "status": "cancelled",
+                       "yes_price_dollars": "0.35", "fill_count_fp": "0", "side": "yes", "action": "sell"}},
+        ]
+    })
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.40), ("M2", 0.35)],
+        net_profit=0.05, profit_pct=5.0, exposure_ratio=1.5,
+    )
+    asyncio.run(executor.execute(signal, quantity=1))
+    assert not executor.is_event_blacklisted("E1")
+    assert not executor._executing
 
 
 def test_executor_accepts_risk_profile_directly():
@@ -103,7 +187,7 @@ def _make_executor_with_profile(mode="conservative", fill_timeout=0):
     api = MagicMock()
     api.batch_create_orders = AsyncMock(return_value={
         "orders": [
-            {"order": {"order_id": "o1", "ticker": "M1", "status": "resting",
+            {"order": {"order_id": "o1", "ticker": "M1", "status": "cancelled",
                        "yes_price_dollars": "0.46", "fill_count_fp": "0.00",
                        "action": "sell", "side": "yes", "initial_count_fp": "1.00"}},
             {"order": {"order_id": "o2", "ticker": "M2", "status": "executed",
@@ -115,13 +199,15 @@ def _make_executor_with_profile(mode="conservative", fill_timeout=0):
     api.cancel_order = AsyncMock(return_value={})
     order_builder = MagicMock()
     order_builder.unwrap_order = lambda raw: raw.get("order", raw)
-    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
-    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "buy", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
     positions = MagicMock()
     positions.record_fill = MagicMock()
@@ -178,9 +264,9 @@ def test_unwind_places_buy_order():
     assert unwind_orders[0]["ticker"] == "M2"
 
 
-def test_buy_side_resting_leg_immediate_cancel():
-    """When a buy-side arb has a resting leg in the batch response,
-    cancel immediately and unwind filled legs — don't wait for fill_timeout."""
+def test_buy_side_partial_ioc_fill_triggers_unwind():
+    """With IOC, when one buy-side leg is cancelled and one fills, unwind the filled leg
+    immediately — no batch_cancel_orders needed since IOC auto-cancels."""
     profile = load_risk_profile("conservative", {
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
@@ -193,21 +279,23 @@ def test_buy_side_resting_leg_immediate_cancel():
     api.get_balance = AsyncMock(return_value={"balance": 10000})
     order_builder = MagicMock()
     order_builder.unwrap_order = lambda raw: raw.get("order", raw)
-    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
-    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "buy", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
     positions = MagicMock()
     positions.record_fill = MagicMock()
 
     api.batch_create_orders = AsyncMock(side_effect=[
-        # Original batch: KIA resting, SAM filled
+        # Original batch: KIA cancelled by exchange (IOC), SAM filled
         {"orders": [
-            {"order": {"order_id": "o1", "ticker": "KIA", "status": "resting",
+            {"order": {"order_id": "o1", "ticker": "KIA", "status": "cancelled",
                        "yes_price_dollars": "0.24", "fill_count_fp": "0.00",
                        "action": "buy", "side": "yes", "initial_count_fp": "1.00"}},
             {"order": {"order_id": "o2", "ticker": "SAM", "status": "executed",
@@ -239,16 +327,15 @@ def test_buy_side_resting_leg_immediate_cancel():
     elapsed = time.time() - start
 
     # Should complete well under fill_timeout_secs (60s)
-    assert elapsed < 5.0, f"Took {elapsed:.1f}s — should have cancelled immediately, not waited for timeout"
-    # Resting leg should have been cancelled
-    api.batch_cancel_orders.assert_called_once_with(["o1"])
-    # Event should be blacklisted
+    assert elapsed < 5.0, f"Took {elapsed:.1f}s — should have returned immediately after IOC response"
+    # No explicit cancel call needed — IOC orders auto-cancel on exchange
+    api.batch_cancel_orders.assert_not_called()
+    # Event should be blacklisted due to partial fill
     assert executor.is_event_blacklisted("E1")
 
 
-def test_sell_side_resting_still_waits_for_fills():
-    """Sell-side arbs with resting legs should still use _monitor_fills,
-    not the immediate cancel path."""
+def test_sell_side_ioc_partial_fill_triggers_unwind():
+    """Sell-side IOC: one leg cancelled by exchange triggers unwind for filled legs."""
     executor, api, positions = _make_executor_with_profile()
     signal = TradeSignal(
         event_ticker="E1",
@@ -257,7 +344,7 @@ def test_sell_side_resting_still_waits_for_fills():
     )
     asyncio.run(executor.execute(signal, quantity=1))
 
-    # Should still go through normal flow (timeout-based cancel)
+    # M1 was cancelled, M2 was filled — partial IOC fill should blacklist and unwind
     assert executor.is_event_blacklisted("E1")
 
 
@@ -317,7 +404,7 @@ def test_unwind_sell_side_graduated_phases():
     )
     api.batch_create_orders = AsyncMock(side_effect=[
         {"orders": [
-            {"order": {"order_id": "o1", "ticker": "M1", "status": "resting",
+            {"order": {"order_id": "o1", "ticker": "M1", "status": "cancelled",
                        "yes_price_dollars": "0.46", "fill_count_fp": "0.00",
                        "action": "sell", "side": "yes", "initial_count_fp": "1.00"}},
             {"order": {"order_id": "o2", "ticker": "M2", "status": "executed",
@@ -352,28 +439,30 @@ def test_unwind_buy_side_graduated_prices():
     api.get_balance = AsyncMock(return_value={"balance": 10000})
     order_builder = MagicMock()
     order_builder.unwrap_order = lambda raw: raw.get("order", raw)
-    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
-    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "buy", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
     positions = MagicMock()
     positions.record_fill = MagicMock()
 
     sell_prices_submitted = []
     original_build_sell = order_builder.build_sell_order.side_effect
-    def tracking_build_sell(ticker, yes_price, quantity):
+    def tracking_build_sell(ticker, yes_price, quantity, **kwargs):
         sell_prices_submitted.append(yes_price)
-        return original_build_sell(ticker, yes_price, quantity)
+        return original_build_sell(ticker, yes_price, quantity, **kwargs)
     order_builder.build_sell_order.side_effect = tracking_build_sell
 
     api.batch_create_orders = AsyncMock(side_effect=[
-        # Original arb batch: KIA resting, SAM filled
+        # Original arb batch: KIA cancelled by exchange (IOC), SAM filled
         {"orders": [
-            {"order": {"order_id": "o1", "ticker": "KIA", "status": "resting",
+            {"order": {"order_id": "o1", "ticker": "KIA", "status": "cancelled",
                        "yes_price_dollars": "0.24", "fill_count_fp": "0.00",
                        "action": "buy", "side": "yes", "initial_count_fp": "1.00"}},
             {"order": {"order_id": "o2", "ticker": "SAM", "status": "executed",
@@ -409,9 +498,9 @@ def test_unwind_buy_side_graduated_prices():
     assert sell_prices_submitted == [0.63, 0.60, 0.54, 0.33, 0.01]
 
 
-def test_buy_side_all_legs_resting_no_blacklist():
-    """When ALL buy-side legs are resting (none filled), cancel all and return
-    without blacklisting or unwinding — no exposure to unwind."""
+def test_buy_side_all_legs_cancelled_no_blacklist():
+    """When ALL IOC buy-side legs are cancelled by exchange (none filled), no unwind needed
+    — no exposure to unwind, event not blacklisted."""
     profile = load_risk_profile("conservative", {
         "unwind_phase1_secs": 0,
         "unwind_phase2_secs": 0,
@@ -423,19 +512,20 @@ def test_buy_side_all_legs_resting_no_blacklist():
     api.get_balance = AsyncMock(return_value={"balance": 10000})
     order_builder = MagicMock()
     order_builder.unwrap_order = lambda raw: raw.get("order", raw)
-    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "buy", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
     positions = MagicMock()
     positions.record_fill = MagicMock()
 
     api.batch_create_orders = AsyncMock(return_value={
         "orders": [
-            {"order": {"order_id": "o1", "ticker": "KIA", "status": "resting",
+            {"order": {"order_id": "o1", "ticker": "KIA", "status": "cancelled",
                        "yes_price_dollars": "0.24", "fill_count_fp": "0.00",
                        "action": "buy", "side": "yes", "initial_count_fp": "1.00"}},
-            {"order": {"order_id": "o2", "ticker": "SAM", "status": "resting",
+            {"order": {"order_id": "o2", "ticker": "SAM", "status": "cancelled",
                        "yes_price_dollars": "0.66", "fill_count_fp": "0.00",
                        "action": "buy", "side": "yes", "initial_count_fp": "1.00"}},
         ],
@@ -454,7 +544,8 @@ def test_buy_side_all_legs_resting_no_blacklist():
     )
     asyncio.run(executor.execute(signal, quantity=1))
 
-    api.batch_cancel_orders.assert_called_once_with(["o1", "o2"])
+    # No explicit cancel calls — IOC auto-cancels on the exchange
+    api.batch_cancel_orders.assert_not_called()
     assert not executor.is_event_blacklisted("E1")
     # batch_create_orders called only once (original arb), no unwind calls
     api.batch_create_orders.assert_called_once()
@@ -492,9 +583,10 @@ def test_sequential_execution_sends_legs_one_at_a_time():
     api = MagicMock()
     order_builder = MagicMock()
     order_builder.unwrap_order = lambda raw: raw.get("order", raw)
-    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
     api.batch_cancel_orders = AsyncMock(return_value={})
     positions = MagicMock()
@@ -544,13 +636,15 @@ def test_sequential_execution_aborts_on_resting():
     api = MagicMock()
     order_builder = MagicMock()
     order_builder.unwrap_order = lambda raw: raw.get("order", raw)
-    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
-    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "buy", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
     api.batch_cancel_orders = AsyncMock(return_value={})
     api.cancel_order = AsyncMock(return_value={})
@@ -595,9 +689,10 @@ def test_sequential_execution_zero_exposure_on_first_leg_resting():
     api = MagicMock()
     order_builder = MagicMock()
     order_builder.unwrap_order = lambda raw: raw.get("order", raw)
-    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
+        **kwargs,
     })
     api.batch_cancel_orders = AsyncMock(return_value={})
     positions = MagicMock()

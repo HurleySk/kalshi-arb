@@ -22,13 +22,13 @@ class SimulatedAPI:
         self._order_counter += 1
         return f"sim-{self._order_counter:06d}"
 
-    def build_sell_order(self, ticker: str, yes_price: float, quantity: int) -> dict:
+    def build_sell_order(self, ticker: str, yes_price: float, quantity: int, **kwargs) -> dict:
         return {
             "ticker": ticker, "action": "sell", "side": "yes",
             "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,
         }
 
-    def build_buy_order(self, ticker: str, yes_price: float, quantity: int) -> dict:
+    def build_buy_order(self, ticker: str, yes_price: float, quantity: int, **kwargs) -> dict:
         return {
             "ticker": ticker, "action": "buy", "side": "yes",
             "type": "limit", "yes_price": round(yes_price * 100), "count": quantity,

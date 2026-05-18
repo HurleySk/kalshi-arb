@@ -146,7 +146,7 @@ class KalshiAPI:
     async def get_orderbook(self, ticker: str) -> dict:
         return await self._get(f"/markets/{ticker}/orderbook")
 
-    def build_sell_order(self, ticker: str, yes_price: float, quantity: int) -> dict:
+    def build_sell_order(self, ticker: str, yes_price: float, quantity: int, **kwargs) -> dict:
         return {
             "ticker": ticker,
             "action": "sell",
@@ -156,7 +156,7 @@ class KalshiAPI:
             "count": quantity,
         }
 
-    def build_buy_order(self, ticker: str, yes_price: float, quantity: int) -> dict:
+    def build_buy_order(self, ticker: str, yes_price: float, quantity: int, **kwargs) -> dict:
         return {
             "ticker": ticker,
             "action": "buy",
@@ -166,7 +166,7 @@ class KalshiAPI:
             "count": quantity,
         }
 
-    def build_close_order(self, ticker: str, qty: int) -> dict:
+    def build_close_order(self, ticker: str, qty: int, **kwargs) -> dict:
         # Kalshi API valid range: yes_price 1-99 (cents). 100 returns invalid_price error.
         if qty < 0:
             return {

@@ -92,9 +92,13 @@ class ExecutionManager:
         for i, (ticker, price) in enumerate(signal.legs):
             action = signal.leg_actions[i] if signal.leg_actions else "sell"
             if action == "buy":
-                orders.append(self.order_builder.build_buy_order(ticker, price, quantity))
+                orders.append(self.order_builder.build_buy_order(
+                    ticker, price, quantity,
+                    time_in_force="immediate_or_cancel"))
             else:
-                orders.append(self.order_builder.build_sell_order(ticker, price, quantity))
+                orders.append(self.order_builder.build_sell_order(
+                    ticker, price, quantity,
+                    time_in_force="immediate_or_cancel"))
         return orders
 
     async def execute(self, signal: TradeSignal, quantity: int = 1):
@@ -165,29 +169,19 @@ class ExecutionManager:
                         action=inner.get("action", "sell"),
                     )
 
-            is_buy_side = signal.leg_actions and all(a == "buy" for a in signal.leg_actions)
-            if is_buy_side and len(execution.filled) < len(execution.order_ids):
-                resting_ids = [oid for oid in execution.order_ids if oid not in execution.filled]
-                if resting_ids:
-                    logger.warning(
-                        "Buy-side resting legs detected for %s: %d/%d filled, cancelling %d immediately",
-                        signal.event_ticker, len(execution.filled), len(execution.order_ids), len(resting_ids),
-                    )
-                    await asyncio.wait_for(self.api.batch_cancel_orders(resting_ids), timeout=self._timeouts.batch_cancel)
-                    if execution.filled:
-                        logger.error(
-                            "PARTIAL FILL on %s: %d legs filled, %d cancelled — UNHEDGED EXPOSURE",
-                            signal.event_ticker, len(execution.filled), len(resting_ids),
-                        )
-                        self._failed_events.add(signal.event_ticker)
-                        self._executing = False
-                        self._active = None
-                        self._launch_unwind(execution)
-                    return
+            # IOC: all orders are either executed or cancelled — no resting state
+            filled_count = len(execution.filled)
+            total_count = len(execution.order_ids)
 
-            await self._monitor_fills(execution)
-
-            if execution._needs_unwind:
+            if filled_count == total_count:
+                logger.info("All %d IOC legs filled for %s", total_count, signal.event_ticker)
+            elif filled_count > 0:
+                cancelled_count = total_count - filled_count
+                logger.error(
+                    "PARTIAL IOC FILL on %s: %d/%d legs filled, %d cancelled by exchange — UNHEDGED EXPOSURE",
+                    signal.event_ticker, filled_count, total_count, cancelled_count,
+                )
+                self._failed_events.add(signal.event_ticker)
                 if self.recorder:
                     self.recorder.record_execution(
                         event_ticker=signal.event_ticker,
@@ -206,16 +200,11 @@ class ExecutionManager:
                 self._active = None
                 self._launch_unwind(execution)
                 return
+            else:
+                logger.info("All IOC legs cancelled for %s — arb opportunity gone", signal.event_ticker)
 
             if self.recorder:
-                filled_count = len(execution.filled)
-                total_count = len(execution.order_ids)
-                if filled_count == total_count:
-                    result = "full_fill"
-                elif filled_count > 0:
-                    result = "partial_fill"
-                else:
-                    result = "failed"
+                result = "full_fill" if len(execution.filled) == len(execution.order_ids) else "failed"
                 self.recorder.record_execution(
                     event_ticker=signal.event_ticker,
                     strategy=signal.signal_type,
@@ -284,7 +273,7 @@ class ExecutionManager:
         except (asyncio.TimeoutError, Exception):
             logger.warning("Failed to cancel previous unwind order %s — proceeding", prev_oid)
         build = self.order_builder.build_buy_order if action == "buy" else self.order_builder.build_sell_order
-        order = [build(ticker, price_cents / 100, qty)]
+        order = [build(ticker, price_cents / 100, qty, expiration_ts=int(time.time()) + 60)]
         resp = await asyncio.wait_for(self.api.batch_create_orders(order), timeout=self._timeouts.batch_create)
         inner = self.order_builder.unwrap_order(resp.get("orders", [{}])[0])
         status = inner.get("status", "")

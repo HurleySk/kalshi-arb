@@ -15,7 +15,7 @@ def test_full_pipeline_detects_and_builds_orders():
     positions = PositionTracker()
 
     api = MagicMock()
-    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity: {
+    api.build_sell_order = MagicMock(side_effect=lambda ticker, yes_price, quantity, **kwargs: {
         "ticker": ticker,
         "action": "sell",
         "side": "yes",
@@ -54,6 +54,53 @@ def test_full_pipeline_detects_and_builds_orders():
     assert len(orders) == 3
     tickers = {o["ticker"] for o in orders}
     assert tickers == {"M1", "M2", "M3"}
+
+
+def test_ioc_taker_signal_to_execution():
+    """Full pipeline: signal → executor builds IOC orders → handles mixed fill/cancel response."""
+    from unittest.mock import AsyncMock, MagicMock
+    from src.executor import ExecutionManager, TimeoutConfig
+    from src.exchanges.kalshi.order_builder import KalshiOrderBuilder
+    from src.core.models import TradeSignal
+    from src.core.positions import PositionTracker
+
+    order_builder = KalshiOrderBuilder()
+    api = MagicMock()
+    api.batch_create_orders = AsyncMock(return_value={
+        "orders": [
+            {"order": {"order_id": "o1", "ticker": "M1", "status": "executed",
+                       "yes_price_dollars": "0.40", "fill_count_fp": "1",
+                       "side": "yes", "action": "sell", "ticker": "M1"}},
+            {"order": {"order_id": "o2", "ticker": "M2", "status": "executed",
+                       "yes_price_dollars": "0.35", "fill_count_fp": "1",
+                       "side": "yes", "action": "sell", "ticker": "M2"}},
+            {"order": {"order_id": "o3", "ticker": "M3", "status": "executed",
+                       "yes_price_dollars": "0.33", "fill_count_fp": "1",
+                       "side": "yes", "action": "sell", "ticker": "M3"}},
+        ]
+    })
+    api.batch_cancel_orders = AsyncMock(return_value={})
+    positions = PositionTracker()
+    executor = ExecutionManager(
+        api=api, order_builder=order_builder, positions=positions,
+        fill_timeout_secs=30,
+        timeouts=TimeoutConfig(batch_create=5, batch_cancel=5, balance=5, monitor_poll=0.01),
+    )
+
+    signal = TradeSignal(
+        event_ticker="E1",
+        legs=[("M1", 0.40), ("M2", 0.35), ("M3", 0.33)],
+        net_profit=0.03, profit_pct=3.0, exposure_ratio=1.5,
+    )
+
+    orders = executor.build_orders(signal, quantity=1)
+    for order in orders:
+        assert order["time_in_force"] == "immediate_or_cancel"
+
+    import asyncio
+    asyncio.run(executor.execute(signal, quantity=1))
+    assert not executor.is_event_blacklisted("E1")
+    assert not executor._executing
 
 
 def test_full_pipeline_no_arb():

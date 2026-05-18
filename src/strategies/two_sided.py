@@ -10,13 +10,15 @@ logger = logging.getLogger(__name__)
 
 class TwoSidedManager:
     def __init__(self, api, risk_profile: RiskProfile, order_builder=None,
-                 capital_guard=None, exchange_name: str = "kalshi"):
+                 capital_guard=None, exchange_name: str = "kalshi",
+                 maker_order_ttl_secs: int = 300):
         self.api = api
         self.order_builder = order_builder if order_builder is not None else api
         self._timeout_secs = risk_profile.two_sided_timeout_secs
         self._max_inventory = risk_profile.two_sided_max_inventory
         self._capital_guard = capital_guard
         self._exchange_name = exchange_name
+        self._order_ttl_secs = maker_order_ttl_secs
         # ticker → {buy_id, sell_id, filled_side, quantity, posted_at}
         self._positions: dict[str, dict] = {}
         self._unwind_order_ids: set[str] = set()
@@ -41,10 +43,13 @@ class TwoSidedManager:
                 logger.info("capital_limit: skipping two-sided on %s", signal.event_ticker)
                 return False
 
+        exp_ts = int(time.time()) + self._order_ttl_secs
         buy_leg, sell_leg = signal.legs
         orders = [
-            self.order_builder.build_buy_order(buy_leg[0], buy_leg[1], quantity),
-            self.order_builder.build_sell_order(sell_leg[0], sell_leg[1], quantity),
+            self.order_builder.build_buy_order(buy_leg[0], buy_leg[1], quantity,
+                                               expiration_ts=exp_ts),
+            self.order_builder.build_sell_order(sell_leg[0], sell_leg[1], quantity,
+                                                expiration_ts=exp_ts),
         ]
         resp = await self.api.batch_create_orders(orders)
         order_list = resp.get("orders", [])
@@ -101,7 +106,8 @@ class TwoSidedManager:
 
     async def _unwind_long(self, ticker: str, bought_at: float, quantity: int):
         price = round(min(0.99, bought_at + 0.01), 2)
-        order = self.order_builder.build_sell_order(ticker, price, quantity)
+        order = self.order_builder.build_sell_order(ticker, price, quantity,
+                                                    expiration_ts=int(time.time()) + 60)
         resp = await self.api.batch_create_orders([order])
         oid = self.order_builder.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
         if oid:
@@ -109,7 +115,8 @@ class TwoSidedManager:
 
     async def _unwind_short(self, ticker: str, sold_at: float, quantity: int):
         price = round(max(0.01, sold_at - 0.01), 2)
-        order = self.order_builder.build_buy_order(ticker, price, quantity)
+        order = self.order_builder.build_buy_order(ticker, price, quantity,
+                                                   expiration_ts=int(time.time()) + 60)
         resp = await self.api.batch_create_orders([order])
         oid = self.order_builder.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
         if oid:

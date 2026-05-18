@@ -30,6 +30,7 @@ strategy:
   maker_fill_mode: cancel_and_take    # cancel_and_take | tighten_on_fill
   max_maker_events: 3                 # Max events with resting maker orders
   maker_max_horizon_hours: 4          # Only post maker orders on events closing within this window
+  maker_order_ttl_secs: 300             # How long maker/two-sided resting orders live before exchange auto-cancels (seconds)
   # maker_min_volume_24h: 10.0        # Volume floor for maker (lower than taker; conservative=10, moderate/aggressive=0)
   max_contracts_per_arb: 1            # Max contracts per arb execution (default: 1)
   sequential_execution: true          # Execute legs one at a time, highest price first (default: true)
