@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch, call, ANY
 
 from src.core.models import Orderbook, TradeSignal
 from src.exchanges.kalshi.discovery import EventDiscovery
@@ -94,7 +94,7 @@ def test_boot_reconcile_closes_shorts():
     _setup_boot_reconcile(bot, positions=positions)
     asyncio.run(bot._boot_reconcile())
     bot.positions.load_position.assert_not_called()
-    bot.order_builder.build_close_order.assert_called_once_with("M_SHORT", -1)
+    bot.order_builder.build_close_order.assert_called_once_with("M_SHORT", -1, expiration_ts=ANY)
     bot.api.batch_create_orders.assert_called_once()
 
 
@@ -109,7 +109,7 @@ def test_boot_reconcile_handles_mixed_state():
     asyncio.run(bot._boot_reconcile())
     bot.api.batch_cancel_orders.assert_called_once_with(["ORD1"])
     bot.positions.load_position.assert_called_once_with("LONG1", "yes", 3)
-    bot.order_builder.build_close_order.assert_called_once_with("SHORT1", -1)
+    bot.order_builder.build_close_order.assert_called_once_with("SHORT1", -1, expiration_ts=ANY)
 
 
 def test_pending_execution_prevents_duplicate():

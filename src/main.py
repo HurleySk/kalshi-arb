@@ -93,6 +93,7 @@ class ArbBot:
             track_fill_id=self.executor._track_fill_id,
             capital_guard=self.capital_guard,
             exchange_name=self.cfg.exchange,
+            maker_order_ttl_secs=self.cfg.maker_order_ttl_secs,
         ) if self.cfg.maker_enabled else None
         self.two_sided = TwoSidedManager(
             api=self.api,
@@ -100,6 +101,7 @@ class ArbBot:
             risk_profile=self.risk_profile,
             capital_guard=self.capital_guard,
             exchange_name=self.cfg.exchange,
+            maker_order_ttl_secs=self.cfg.maker_order_ttl_secs,
         ) if self.risk_profile.two_sided_max_inventory > 0 else None
         self.scanner = self.exchange.create_feed(
             self.orderbook_mgr,
@@ -372,7 +374,8 @@ class ArbBot:
                         if self.reservations.is_reserved(mp["ticker"]):
                             logger.info("Emergency shutdown: skipping reserved %s", mp["ticker"])
                             continue
-                        close_orders.append(self.order_builder.build_close_order(mp["ticker"], qty))
+                        close_orders.append(self.order_builder.build_close_order(
+                            mp["ticker"], qty, expiration_ts=int(time.time()) + 60))
                 if close_orders:
                     await asyncio.wait_for(self.api.batch_create_orders(close_orders),
                                            timeout=self._shutdown_api_timeout)
@@ -518,7 +521,8 @@ class ArbBot:
                     "Boot: found %d inherited short position(s) — closing before trading", len(shorts)
                 )
                 for ticker in shorts:
-                    order = self.order_builder.build_close_order(ticker, -1)
+                    order = self.order_builder.build_close_order(ticker, -1,
+                                                                 expiration_ts=int(time.time()) + 60)
                     try:
                         result = await asyncio.wait_for(
                             self.api.batch_create_orders([order]), timeout=15)
