@@ -1,4 +1,5 @@
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 from src.strategies.two_sided import TwoSidedManager
 from src.risk import load_risk_profile
@@ -119,3 +120,41 @@ def test_post_rejects_when_over_budget():
     result = asyncio.run(mgr.post(signal))
     assert result is False
     api.batch_create_orders.assert_not_called()
+
+
+def test_post_includes_expiration_ts():
+    """Two-sided orders should include expiration_ts."""
+    from src.core.risk import load_risk_profile
+    api = MagicMock()
+    api.batch_create_orders = AsyncMock(return_value={
+        "orders": [
+            {"order": {"order_id": "b1", "ticker": "M1"}},
+            {"order": {"order_id": "s1", "ticker": "M1"}},
+        ]
+    })
+    order_builder = MagicMock()
+    order_builder.build_buy_order = MagicMock(side_effect=lambda ticker, price, quantity, **kwargs: {
+        "ticker": ticker, "action": "buy", **kwargs,
+    })
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, price, quantity, **kwargs: {
+        "ticker": ticker, "action": "sell", **kwargs,
+    })
+    rp = load_risk_profile("aggressive", {"two_sided_max_inventory": 10})
+    ts = TwoSidedManager(api=api, risk_profile=rp, order_builder=order_builder,
+                         maker_order_ttl_secs=300)
+
+    signal = TradeSignal(
+        event_ticker="M1",
+        legs=[("M1", 0.40), ("M1", 0.46)],
+        net_profit=0.02, profit_pct=2.0, exposure_ratio=1.0,
+        quantity=1,
+    )
+    before = int(time.time())
+    asyncio.run(ts.post(signal))
+    after = int(time.time())
+
+    for call in order_builder.build_buy_order.call_args_list + order_builder.build_sell_order.call_args_list:
+        kwargs = call.kwargs if call.kwargs else {}
+        exp_ts = kwargs.get("expiration_ts")
+        assert exp_ts is not None
+        assert before + 300 <= exp_ts <= after + 300
