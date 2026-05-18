@@ -56,8 +56,9 @@ class ArbBot:
 
         if self.cfg.recording_enabled:
             self.recorder = DataRecorder(
-                session_dir=self.cfg.recording_session_dir,
+                db_path=self.cfg.recording_db_path,
                 max_db_size_mb=self.cfg.retention_max_db_size_mb,
+                write_buffer_size=self.cfg.recording_write_buffer_size,
             )
         else:
             self.recorder = DataRecorder()

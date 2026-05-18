@@ -2,25 +2,24 @@ import json
 import time
 import pytest
 from src.models import Orderbook
-from src.recorder import DataRecorder
+from src.core.recorder import DataRecorder
 from src.replay import ReplayEngine
 
 
 @pytest.fixture
 def db_with_data(tmp_path):
-    db_path = str(tmp_path / "test.db")
+    db_path = str(tmp_path / "test.duckdb")
     rec = DataRecorder(db_path)
     sid = rec.start_session({"risk_mode": "conservative"})
     now = time.time()
     rec._conn.execute(
         "INSERT INTO orderbook_snapshots (session_id, ts, event_ticker, market_ticker, yes_bids_json, no_bids_json) VALUES (?, ?, ?, ?, ?, ?)",
-        (sid, now, "EVT-A", "MKT-1", json.dumps({"55": 10.0}), json.dumps({})),
+        [sid, now, "EVT-A", "MKT-1", json.dumps({"55": 10.0}), json.dumps({})],
     )
     rec._conn.execute(
         "INSERT INTO orderbook_snapshots (session_id, ts, event_ticker, market_ticker, yes_bids_json, no_bids_json) VALUES (?, ?, ?, ?, ?, ?)",
-        (sid, now, "EVT-A", "MKT-2", json.dumps({"56": 10.0}), json.dumps({})),
+        [sid, now, "EVT-A", "MKT-2", json.dumps({"56": 10.0}), json.dumps({})],
     )
-    rec._conn.commit()
     rec.end_session()
     rec.close()
     return db_path
@@ -42,7 +41,6 @@ def test_load_snapshots(db_with_data):
 
 def test_load_snapshots_date_filter(db_with_data):
     engine = ReplayEngine(db_with_data)
-    # filter to future window — should return no snapshots
     future = time.time() + 9999
     snapshots = engine.load_snapshots(start=future)
     assert len(snapshots) == 0
@@ -74,10 +72,9 @@ def test_sweep_train_test_split(db_with_data):
 
 
 def test_sweep_multi_param(db_with_data):
-    """Cartesian product of multiple params."""
     engine = ReplayEngine(db_with_data)
     results = engine.sweep({"min_profit_pct": [0.5, 2.0], "min_bid_depth": [1, 5]})
-    assert len(results) == 4  # 2 x 2
+    assert len(results) == 4
     for r in results:
         assert "params" in r
         assert "min_profit_pct" in r["params"]
@@ -94,7 +91,6 @@ def test_find_plateaus(db_with_data):
         {"params": {"min_profit_pct": 2.0}, "signal_count": 2, "theoretical_profit": 10.0},
     ]
     plateaus = engine.find_plateaus(results, "min_profit_pct", threshold=0.10)
-    # 0.5-1.5 should be a plateau (all within 10% of max 100.0)
     assert len(plateaus) >= 1
     lo, hi = plateaus[0]
     assert lo == 0.5
@@ -103,19 +99,16 @@ def test_find_plateaus(db_with_data):
 
 
 def test_load_snapshots_int_keys(db_with_data):
-    """Verify yes_bids keys are ints (not strings) after loading."""
     engine = ReplayEngine(db_with_data)
     snapshots = engine.load_snapshots()
     ts, events = snapshots[0]
     book = events["EVT-A"]["MKT-1"]
-    # Keys must be int, not str
     for key in book.yes_bids:
         assert isinstance(key, int), f"Expected int key, got {type(key)}: {key!r}"
     engine.close()
 
 
 def test_evaluate_snapshots_counts(db_with_data):
-    """Signals should be zero for snapshots that do not reach arb threshold."""
     from src.risk import load_risk_profile
     from src.engine import ArbEngine
 
@@ -124,9 +117,6 @@ def test_evaluate_snapshots_counts(db_with_data):
     replay = ReplayEngine(db_with_data)
     snapshots = replay.load_snapshots()
     signal_count, total_profit = replay._evaluate_snapshots(arb_engine, snapshots)
-    # bid_sum = 0.55 + 0.56 = 1.11 which exceeds taker threshold of ~1.07
-    # but min_bid_depth=5 and depth=10 (passes), min_volume_24h=50 but no metadata (passes with None)
-    # So we might get a signal. Just verify counts are non-negative.
     assert signal_count >= 0
     assert total_profit >= 0.0
     replay.close()

@@ -1,19 +1,20 @@
 """
-ReplayEngine — Load recorded orderbook snapshots from SQLite and re-evaluate
+ReplayEngine — Load recorded orderbook snapshots from DuckDB and re-evaluate
 them with different ArbEngine parameters to answer "what would have happened
 with different thresholds?"
 
 Usage (module mode):
-    python3 -m src.replay --db data/arb_history.db --sweep min_profit_pct=0.5:3.0:0.25
+    python3 -m src.replay --db data/arb_history.duckdb --sweep min_profit_pct=0.5:3.0:0.25
     python3 -m src.replay --sweep min_profit_pct=0.5:3.0:0.25 \\
         --train-end 2026-05-08 --test-start 2026-05-08
 """
 
 import itertools
 import json
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
+
+import duckdb
 
 from src.core.engine import ArbEngine
 from src.core.models import Orderbook
@@ -29,8 +30,7 @@ class ReplayEngine:
         self._db_path = db_path
         self._risk_mode = risk_mode
         self._fee_model = fee_model
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+        self._conn = duckdb.connect(db_path, read_only=True)
 
     # ------------------------------------------------------------------
     # Loading
@@ -41,7 +41,7 @@ class ReplayEngine:
         start: float | None = None,
         end: float | None = None,
     ) -> list[tuple[float, dict[str, dict[str, Orderbook]]]]:
-        """Load orderbook snapshots from SQLite.
+        """Load orderbook snapshots from DuckDB.
 
         Returns list of (timestamp, {event_ticker: {market_ticker: Orderbook}}),
         sorted by timestamp ascending. Multiple rows at the same timestamp are
@@ -62,17 +62,12 @@ class ReplayEngine:
 
         rows = self._conn.execute(query, params).fetchall()
 
-        # Group by timestamp then event_ticker
         grouped: dict[float, dict[str, dict[str, Orderbook]]] = {}
-        for row in rows:
-            ts = row["ts"]
-            event_ticker = row["event_ticker"]
-            market_ticker = row["market_ticker"]
-            yes_bids_json = row["yes_bids_json"] or "{}"
-            no_bids_json = row["no_bids_json"] or "{}"
+        for ts, event_ticker, market_ticker, yes_bids_json, no_bids_json in rows:
+            yes_bids_json = yes_bids_json or "{}"
+            no_bids_json = no_bids_json or "{}"
 
             bids = {int(k): v for k, v in json.loads(yes_bids_json).items()}
-            # DB stores no-side bids (cents). Convert to yes-side asks: ask_cents = 100 - no_bid_cents
             asks = {100 - int(k): v for k, v in json.loads(no_bids_json).items()}
             book = Orderbook(bids=bids, asks=asks)
 
@@ -96,30 +91,6 @@ class ReplayEngine:
         train_end: float | None = None,
         test_start: float | None = None,
     ) -> list[dict]:
-        """Parameter sweep over recorded snapshots.
-
-        Args:
-            param_ranges: {param_name: [value1, value2, ...]} — one list per
-                parameter. The sweep covers the cartesian product.
-            start: optional lower bound timestamp for snapshot selection.
-            end: optional upper bound timestamp for snapshot selection.
-            train_end: if set together with test_start, splits results into
-                train_* and test_* metrics.
-            test_start: see train_end.
-
-        Returns:
-            list of dicts, one per parameter combination:
-            {
-                "params": {...},
-                "signal_count": int,
-                "theoretical_profit": float,
-                # when train/test split:
-                "train_signal_count": int,
-                "train_theoretical_profit": float,
-                "test_signal_count": int,
-                "test_theoretical_profit": float,
-            }
-        """
         use_split = train_end is not None and test_start is not None
 
         if use_split:
@@ -170,10 +141,6 @@ class ReplayEngine:
         engine: ArbEngine,
         snapshots: list[tuple[float, dict[str, dict[str, Orderbook]]]],
     ) -> tuple[int, float]:
-        """Evaluate all snapshots through engine.evaluate() and evaluate_buy_side().
-
-        Returns (signal_count, total_theoretical_profit).
-        """
         signal_count = 0
         total_profit = 0.0
         seen: set[str] = set()
@@ -208,18 +175,6 @@ class ReplayEngine:
         param_name: str,
         threshold: float = 0.10,
     ) -> list[tuple]:
-        """Find ranges of param_name where profit is within threshold of maximum.
-
-        Args:
-            results: list of sweep result dicts (must contain "params" and
-                "theoretical_profit").
-            param_name: the parameter to scan for plateaus.
-            threshold: fractional tolerance from max profit (default 0.10 = 10%).
-
-        Returns:
-            list of (lo, hi) tuples representing contiguous plateau ranges.
-        """
-        # Extract and sort by param value
         pairs = []
         for r in results:
             if param_name not in r["params"]:
@@ -242,12 +197,10 @@ class ReplayEngine:
             if is_good and plateau_start is None:
                 plateau_start = val
             elif not is_good and plateau_start is not None:
-                # plateau ended at previous value
                 prev_val = pairs[i - 1][0]
                 in_plateau.append((plateau_start, prev_val))
                 plateau_start = None
 
-        # Close any open plateau at the end
         if plateau_start is not None:
             in_plateau.append((plateau_start, pairs[-1][0]))
 
@@ -258,7 +211,7 @@ class ReplayEngine:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Close the SQLite connection."""
+        """Close the DuckDB connection."""
         self._conn.close()
 
 
@@ -295,8 +248,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--db",
-        default="data/arb_history.db",
-        help="Path to SQLite database (default: data/arb_history.db)",
+        default="data/arb_history.duckdb",
+        help="Path to DuckDB database (default: data/arb_history.duckdb)",
     )
     parser.add_argument(
         "--risk-mode",
@@ -338,7 +291,6 @@ def main() -> None:
             train_end=train_end_ts,
             test_start=test_start_ts,
         )
-        # Print results as TSV
         if results:
             headers = list(results[0]["params"].keys()) + [
                 k for k in results[0] if k != "params"
@@ -348,7 +300,6 @@ def main() -> None:
                 row = [str(r["params"].get(h, "")) for h in results[0]["params"]]
                 row += [str(r.get(h, "")) for h in headers if h not in results[0]["params"]]
                 print("\t".join(row))
-        # Find plateaus for each swept param
         for pname in param_ranges:
             plateaus = replay.find_plateaus(results, pname)
             if plateaus:
@@ -356,7 +307,6 @@ def main() -> None:
                 for lo, hi in plateaus:
                     print(f"  [{lo}, {hi}]")
     else:
-        # No sweep — just summarize snapshot count
         snapshots = replay.load_snapshots(start=start_ts, end=end_ts)
         print(f"Loaded {len(snapshots)} snapshot timestamps from {args.db}")
 

@@ -68,7 +68,7 @@ Five async components run concurrently in `ArbBot.run()` (`src/main.py`):
 - `src/core/fees.py` — profit/exposure calculations parameterized by `FeeModel`
 - `src/core/orderbook_manager.py` — `OrderbookManager`: exchange-agnostic orderbook state
 - `src/core/risk.py` — `RiskProfile` dataclass + `load_risk_profile`
-- `src/core/recorder.py` — `DataRecorder`: SQLite-backed recording
+- `src/core/recorder.py` — `DataRecorder`: DuckDB-backed recording
 - `src/core/replay.py` — `ReplayEngine`: parameter sweep over recorded history
 - `src/core/analytics.py` — `Analytics`: per-strategy PnL attribution, rejection funnel
 - `src/ports/` — `FeeModel`, `ExchangeAPI`, `OrderBuilder`, `OrderbookFeed`, `MarketDiscovery`, `PositionConstraints`
@@ -186,7 +186,7 @@ Fee calculations are parameterized by `FeeModel` (`src/ports/fee_model.py`). Eac
 
 **IMPORTANT:** After any change to config parsing, risk profiles, or strategy parameters, always diff `config.yaml` against `config.example.yaml` and remove stale overrides. Old strategy fields (e.g. `min_bid_depth: 1`) silently override risk profile defaults and can neutralize new protections.
 
-`recording:` section controls data recording to SQLite (enabled by default). Each bot session creates a new DB file in `data/sessions/session_{timestamp}.db`. Cleanup deletes oldest session files when total size exceeds `retention_max_db_size_mb` — instant `rm`, no DELETE/VACUUM. Legacy single-DB path (`data/arb_history.db`) is still supported for reading old data. Use `python3 -m src.analytics` for reports, `python3 -m src.replay --sweep` for parameter sweep analysis, and `python3 -m src.dry_run` for replay with fault injection. See `config.example.yaml` for recording options.
+`recording:` section controls data recording to DuckDB (enabled by default). All sessions are stored in a single DuckDB file (`data/arb_history.duckdb`). Cleanup prunes oldest sessions' rows when DB size exceeds `retention_max_db_size_mb`, then checkpoints to reclaim disk space. Orderbook snapshots are buffered and flushed in batches (`write_buffer_size`, default 50) for performance. Use `python3 -m src.analytics` for reports, `python3 -m src.replay --sweep` for parameter sweep analysis, and `python3 -m src.dry_run` for replay with fault injection. See `config.example.yaml` for recording options.
 
 ## Observability
 

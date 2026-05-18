@@ -1,30 +1,30 @@
 """
-Analytics — query the SQLite bot history database and produce performance reports.
+Analytics — query the DuckDB bot history database and produce performance reports.
 
 Usage:
-    python3 -m src.analytics --db data/arb_history.db
-    python3 -m src.analytics --db data/arb_history.db --start 2026-05-01 --end 2026-05-15
-    python3 -m src.analytics --db data/arb_history.db --format json
+    python3 -m src.analytics --db data/arb_history.duckdb
+    python3 -m src.analytics --db data/arb_history.duckdb --start 2026-05-01 --end 2026-05-15
+    python3 -m src.analytics --db data/arb_history.duckdb --format json
 """
 
 import argparse
 import json
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+import duckdb
+
 
 class Analytics:
-    """Read-only analytics over the DataRecorder SQLite database."""
+    """Read-only analytics over the DataRecorder DuckDB database."""
 
     def __init__(self, db_path: str | None = None, session_dir: str | None = None) -> None:
-        self._conn: sqlite3.Connection | None = None
+        self._conn: duckdb.DuckDBPyConnection | None = None
         self._session_dir = session_dir
         self._has_tables = False
 
         if db_path:
-            self._conn = sqlite3.connect(db_path, check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
+            self._conn = duckdb.connect(db_path, read_only=True)
             self._has_tables = self._check_tables()
         elif session_dir:
             self._has_tables = True
@@ -33,28 +33,62 @@ class Analytics:
         if self._conn is None:
             return False
         tables = {r[0] for r in self._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
         ).fetchall()}
         return "signal_evaluations" in tables
 
-    def _query(self, sql: str, params: list | None = None) -> list[sqlite3.Row]:
+    def _query(self, sql: str, params: list | None = None) -> list[dict]:
         if not self._has_tables:
             return []
         if self._session_dir:
             from src.session_reader import SessionReader
-            return SessionReader(self._session_dir).query_across(sql, tuple(params or []))
+            rows = SessionReader(self._session_dir).query_across(sql, tuple(params or []))
+            if not rows:
+                return []
+            # SessionReader returns tuples; extract column names from SQL
+            # by running against first file to get description
+            return self._tuples_to_dicts(sql, rows)
         assert self._conn is not None
-        return self._conn.execute(sql, params or []).fetchall()
+        result = self._conn.execute(sql, params or [])
+        cols = [d[0] for d in result.description]
+        return [dict(zip(cols, row)) for row in result.fetchall()]
 
-    def _query_one(self, sql: str, params: list | None = None) -> sqlite3.Row | None:
+    def _query_one(self, sql: str, params: list | None = None) -> dict | None:
         if not self._has_tables:
             return None
         if self._session_dir:
             from src.session_reader import SessionReader
             rows = SessionReader(self._session_dir).query_across(sql, tuple(params or []))
-            return rows[0] if rows else None
+            if not rows:
+                return None
+            dicts = self._tuples_to_dicts(sql, rows[:1])
+            return dicts[0] if dicts else None
         assert self._conn is not None
-        return self._conn.execute(sql, params or []).fetchone()
+        result = self._conn.execute(sql, params or [])
+        cols = [d[0] for d in result.description]
+        row = result.fetchone()
+        return dict(zip(cols, row)) if row else None
+
+    def _tuples_to_dicts(self, sql: str, rows: list[tuple]) -> list[dict]:
+        """Convert tuples from SessionReader to dicts using column names from SQL aliases."""
+        import re
+        # Extract column aliases from SELECT clause
+        select_match = re.search(r'SELECT\s+(.*?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
+        if not select_match:
+            return [dict(enumerate(r)) for r in rows]
+        select_clause = select_match.group(1)
+        cols: list[str] = []
+        for part in select_clause.split(','):
+            part = part.strip()
+            # Check for AS alias
+            as_match = re.search(r'\bAS\s+(\w+)\s*$', part, re.IGNORECASE)
+            if as_match:
+                cols.append(as_match.group(1))
+            else:
+                # Use the last identifier (handles "table.column" and plain "column")
+                ident = part.split('.')[-1].strip()
+                cols.append(ident)
+        return [dict(zip(cols, row)) for row in rows]
 
     # ------------------------------------------------------------------
     # Public API
@@ -63,13 +97,6 @@ class Analytics:
     def strategy_breakdown(
         self, start: float | None = None, end: float | None = None
     ) -> dict[str, dict[str, int]]:
-        """
-        Return signal counts grouped by strategy and outcome.
-
-        Example:
-            {"taker": {"fire_count": 1, "reject_count": 2,
-                       "near_miss_count": 1, "total": 4}}
-        """
         where, params = self._time_filter(start, end, ts_col="ts")
         sql = f"""
             SELECT
@@ -107,12 +134,6 @@ class Analytics:
     def rejection_funnel(
         self, start: float | None = None, end: float | None = None
     ) -> dict[str, int]:
-        """
-        Return reject counts grouped by reject_reason.
-
-        Example:
-            {"depth_filter": 3, "volume_filter": 2}
-        """
         where, params = self._time_filter(start, end, ts_col="ts")
         sql = f"""
             SELECT reject_reason, COUNT(*) AS cnt
@@ -128,13 +149,6 @@ class Analytics:
     def partial_fill_analysis(
         self, start: float | None = None, end: float | None = None
     ) -> dict[str, Any]:
-        """
-        Return execution stats with partial-fill breakdown.
-
-        Example:
-            {"total_executions": 10, "partial_count": 2,
-             "partial_rate": 0.2, "total_unwind_cost": 0.30, "avg_unwind_cost": 0.15}
-        """
         where, params = self._time_filter(start, end, ts_col="ts")
         sql = f"""
             SELECT
@@ -152,7 +166,6 @@ class Analytics:
         partial = row["partial_count"] or 0
         total_unwind = row["total_unwind_cost"] or 0.0
 
-        # avg_unwind_cost is averaged over partial fills only
         avg_unwind: float = 0.0
         if partial > 0:
             avg_sql = f"""
@@ -175,13 +188,6 @@ class Analytics:
     def balance_curve(
         self, start: float | None = None, end: float | None = None
     ) -> dict[str, Any]:
-        """
-        Return balance-curve summary from the balances table.
-
-        Example:
-            {"start_cash_cents": 10000, "end_cash_cents": 10200,
-             "change_cents": 200, "max_drawdown_cents": 50, "snapshots": 10}
-        """
         where, params = self._time_filter(start, end, ts_col="ts")
         sql = f"""
             SELECT ts, cash_cents
@@ -204,7 +210,6 @@ class Analytics:
         end_cash = cash_series[-1]
         change = end_cash - start_cash
 
-        # Max drawdown: largest peak-to-trough decline
         max_drawdown = 0
         peak = cash_series[0]
         for val in cash_series[1:]:
@@ -225,14 +230,6 @@ class Analytics:
     def near_miss_analysis(
         self, start: float | None = None, end: float | None = None
     ) -> dict[str, Any]:
-        """
-        Return near-miss signal summary.
-
-        Example:
-            {"total_near_misses": 5,
-             "by_strategy": {"taker": 3, "maker": 2},
-             "best_miss": {"event_ticker": "EVT-A", "bid_sum": 0.98, "strategy": "taker"}}
-        """
         where, params = self._time_filter(start, end, ts_col="ts")
         sql = f"""
             SELECT strategy, COUNT(*) AS cnt
@@ -247,7 +244,6 @@ class Analytics:
 
         best_miss = None
         if total > 0:
-            # "best" = highest bid_sum among near-misses (closest to firing)
             best_sql = f"""
                 SELECT event_ticker, bid_sum, strategy
                 FROM signal_evaluations
@@ -273,9 +269,6 @@ class Analytics:
     def full_report(
         self, start: float | None = None, end: float | None = None
     ) -> str:
-        """
-        Produce a human-readable multi-section performance report string.
-        """
         breakdown = self.strategy_breakdown(start, end)
         funnel = self.rejection_funnel(start, end)
         pf = self.partial_fill_analysis(start, end)
@@ -284,16 +277,10 @@ class Analytics:
 
         lines: list[str] = []
 
-        # ------------------------------------------------------------------
-        # Header
-        # ------------------------------------------------------------------
         lines.append("=" * 60)
         lines.append("  Kalshi Arb Bot — Performance Report")
         lines.append("=" * 60)
 
-        # ------------------------------------------------------------------
-        # Strategy Breakdown
-        # ------------------------------------------------------------------
         lines.append("")
         lines.append("Strategy Breakdown")
         lines.append("-" * 40)
@@ -308,9 +295,6 @@ class Analytics:
         else:
             lines.append("  (no data)")
 
-        # ------------------------------------------------------------------
-        # Rejection Funnel
-        # ------------------------------------------------------------------
         lines.append("")
         lines.append("Rejection Funnel")
         lines.append("-" * 40)
@@ -320,9 +304,6 @@ class Analytics:
         else:
             lines.append("  (no rejections)")
 
-        # ------------------------------------------------------------------
-        # Partial Fill Analysis
-        # ------------------------------------------------------------------
         lines.append("")
         lines.append("Partial Fill Analysis")
         lines.append("-" * 40)
@@ -333,9 +314,6 @@ class Analytics:
         lines.append(f"  Total unwind cost: ${pf['total_unwind_cost']:.4f}")
         lines.append(f"  Avg unwind cost  : ${pf['avg_unwind_cost']:.4f}")
 
-        # ------------------------------------------------------------------
-        # Balance Curve
-        # ------------------------------------------------------------------
         lines.append("")
         lines.append("Balance Curve")
         lines.append("-" * 40)
@@ -348,9 +326,6 @@ class Analytics:
             lines.append(f"  Max drawdown: {curve['max_drawdown_cents']}¢")
             lines.append(f"  Snapshots  : {curve['snapshots']}")
 
-        # ------------------------------------------------------------------
-        # Near Miss Analysis
-        # ------------------------------------------------------------------
         lines.append("")
         lines.append("Near Miss Analysis")
         lines.append("-" * 40)
@@ -380,12 +355,6 @@ class Analytics:
         end: float | None,
         ts_col: str = "ts",
     ) -> tuple[str, list]:
-        """
-        Return a (WHERE clause, params list) pair.
-
-        The WHERE clause always starts with "WHERE 1=1" so callers can safely
-        append additional "AND ..." conditions.
-        """
         where = "WHERE 1=1"
         params: list = []
         if start is not None:
@@ -422,8 +391,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--db",
-        default="data/arb_history.db",
-        help="Path to the SQLite history database (default: data/arb_history.db)",
+        default="data/arb_history.duckdb",
+        help="Path to the DuckDB history database (default: data/arb_history.duckdb)",
     )
     parser.add_argument(
         "--start",

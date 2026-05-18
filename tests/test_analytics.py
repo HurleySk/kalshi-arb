@@ -5,13 +5,13 @@ Tests for src/analytics.py — Analytics class and CLI.
 import json
 import time
 import pytest
-from src.recorder import DataRecorder
-from src.analytics import Analytics
+from src.core.recorder import DataRecorder
+from src.core.analytics import Analytics
 
 
 @pytest.fixture
 def db_with_signals(tmp_path):
-    db_path = str(tmp_path / "test.db")
+    db_path = str(tmp_path / "test.duckdb")
     rec = DataRecorder(db_path)
     sid = rec.start_session({"risk_mode": "conservative"})
 
@@ -140,7 +140,7 @@ def test_near_miss_by_strategy(db_with_signals):
 
 def test_rejection_funnel_empty_when_no_rejects(tmp_path):
     """Rejection funnel returns empty dict when there are no rejects."""
-    db_path = str(tmp_path / "empty.db")
+    db_path = str(tmp_path / "empty.duckdb")
     rec = DataRecorder(db_path)
     rec.start_session({"risk_mode": "aggressive"})
     rec.record_signal(event_ticker="EVT-X", strategy="taker", outcome="fire",
@@ -156,7 +156,7 @@ def test_rejection_funnel_empty_when_no_rejects(tmp_path):
 
 def test_balance_curve_empty(tmp_path):
     """balance_curve handles no balance rows gracefully."""
-    db_path = str(tmp_path / "empty.db")
+    db_path = str(tmp_path / "empty.duckdb")
     rec = DataRecorder(db_path)
     rec.start_session({})
     rec.close()
@@ -171,7 +171,7 @@ def test_balance_curve_empty(tmp_path):
 
 def test_partial_fill_analysis_no_executions(tmp_path):
     """partial_fill_analysis handles no execution rows gracefully."""
-    db_path = str(tmp_path / "empty.db")
+    db_path = str(tmp_path / "empty.duckdb")
     rec = DataRecorder(db_path)
     rec.start_session({})
     rec.close()

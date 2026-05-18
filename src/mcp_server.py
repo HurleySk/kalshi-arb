@@ -23,7 +23,7 @@ def _db_kwargs(cfg) -> dict:
         import os
         if os.path.isdir(session_dir):
             return {"session_dir": session_dir}
-    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.db"
+    db_path = cfg.recording_db_path if cfg.recording_enabled else "data/arb_history.duckdb"
     return {"db_path": db_path}
 
 
@@ -323,7 +323,7 @@ async def get_signal_history(
         days: Days to look back (default: 7)
         limit: Max results to return (default: 50)
     """
-    import sqlite3
+    import duckdb
     import time as _time
     from datetime import datetime, timezone
     cfg = load_config(CONFIG_PATH)
@@ -346,8 +346,8 @@ async def get_signal_history(
         from src.session_reader import SessionReader
         rows = SessionReader(kwargs["session_dir"]).query_across(sql, tuple(params + [limit]), start=start, end=end)
     else:
-        db_path = kwargs.get("db_path", "data/arb_history.db")
-        conn = sqlite3.connect(db_path)
+        db_path = kwargs.get("db_path", "data/arb_history.duckdb")
+        conn = duckdb.connect(db_path, read_only=True)
         rows = conn.execute(sql, params + [limit]).fetchall()
         conn.close()
 

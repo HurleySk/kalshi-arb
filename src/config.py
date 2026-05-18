@@ -44,6 +44,7 @@ class Config:
     recording_balance_poll_interval_secs: int
     retention_max_db_size_mb: int
     cleanup_interval_secs: int
+    recording_write_buffer_size: int
     log_max_file_size_mb: int
     log_max_backup_count: int
     predictit_proxy_url: str | None = None
@@ -147,12 +148,13 @@ def load_config(path: str) -> Config:
         log_level=logging_cfg.get("level", "INFO"),
         log_file=logging_cfg.get("file", "logs/arb_bot.log"),
         recording_enabled=recording_cfg.get("enabled", True),
-        recording_db_path=recording_cfg.get("db_path", "data/arb_history.db"),
+        recording_db_path=recording_cfg.get("db_path", "data/arb_history.duckdb"),
         recording_session_dir=recording_cfg.get("session_dir", "data/sessions"),
         recording_snapshot_interval_secs=int(recording_cfg.get("snapshot_interval_secs", 5)),
         recording_balance_poll_interval_secs=int(recording_cfg.get("balance_poll_interval_secs", 300)),
         retention_max_db_size_mb=max(0, int(recording_cfg.get("retention_max_db_size_mb", 5000))),
         cleanup_interval_secs=max(60, int(recording_cfg.get("cleanup_interval_secs", 1800))),
+        recording_write_buffer_size=max(1, int(recording_cfg.get("write_buffer_size", 50))),
         log_max_file_size_mb=max(1, int(logging_cfg.get("max_file_size_mb", 5))),
         log_max_backup_count=max(1, int(logging_cfg.get("max_backup_count", 5))),
         predictit_proxy_url=predictit_proxy_url,
