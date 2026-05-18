@@ -106,7 +106,8 @@ class TwoSidedManager:
 
     async def _unwind_long(self, ticker: str, bought_at: float, quantity: int):
         price = round(min(0.99, bought_at + 0.01), 2)
-        order = self.order_builder.build_sell_order(ticker, price, quantity)
+        order = self.order_builder.build_sell_order(ticker, price, quantity,
+                                                    expiration_ts=int(time.time()) + 60)
         resp = await self.api.batch_create_orders([order])
         oid = self.order_builder.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
         if oid:
@@ -114,7 +115,8 @@ class TwoSidedManager:
 
     async def _unwind_short(self, ticker: str, sold_at: float, quantity: int):
         price = round(max(0.01, sold_at - 0.01), 2)
-        order = self.order_builder.build_buy_order(ticker, price, quantity)
+        order = self.order_builder.build_buy_order(ticker, price, quantity,
+                                                   expiration_ts=int(time.time()) + 60)
         resp = await self.api.batch_create_orders([order])
         oid = self.order_builder.unwrap_order(resp.get("orders", [{}])[0]).get("order_id", "")
         if oid:

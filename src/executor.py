@@ -204,14 +204,7 @@ class ExecutionManager:
                 logger.info("All IOC legs cancelled for %s — arb opportunity gone", signal.event_ticker)
 
             if self.recorder:
-                filled_count = len(execution.filled)
-                total_count = len(execution.order_ids)
-                if filled_count == total_count:
-                    result = "full_fill"
-                elif filled_count > 0:
-                    result = "partial_fill"
-                else:
-                    result = "failed"
+                result = "full_fill" if len(execution.filled) == len(execution.order_ids) else "failed"
                 self.recorder.record_execution(
                     event_ticker=signal.event_ticker,
                     strategy=signal.signal_type,
