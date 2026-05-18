@@ -117,6 +117,7 @@ Individual overrides in `config.yaml` take precedence over preset values.
 - `two_sided_timeout_secs` — cancel unfilled pairs after this many seconds
 - `two_sided_min_volume_24h` — volume floor for two-sided candidates
 - `maker_min_volume_24h` — separate volume floor for maker strategy (lower than taker since makers create liquidity; conservative=10, moderate/aggressive=0)
+- `maker_order_ttl_secs` — how long maker/two-sided resting orders live before exchange auto-cancels (default: 300)
 
 ### Key filtering pipeline in `strategies/taker.evaluate_sell_side()`
 
@@ -129,9 +130,21 @@ Individual overrides in `config.yaml` take precedence over preset values.
 7. `exposure_ratio <= max_exposure_ratio` (worst-case loss / net premium)
 8. Async `_validate_recent_trades` — when enabled, verifies each leg has recent trade activity before execution
 
+### Order Lifecycle
+
+**Taker orders** (sell-side, buy-side, near-expiry, monotone) use `time_in_force: "immediate_or_cancel"` (IOC). They fill instantly or are cancelled by the exchange — no orders ever rest on the book. After the batch response, the executor knows immediately which legs filled.
+
+**Maker orders** use `expiration_ts` set to `now + maker_order_ttl_secs` (default 300s). They rest on the book but auto-expire if the bot loses track. Fresh `expiration_ts` on every reprice. Maker completion orders (cancel_and_take, tighten) use IOC since they're crossing the spread.
+
+**Two-sided orders** use the same `expiration_ts` TTL as maker. Unwind orders (after one side fills) get 60s `expiration_ts`.
+
+**Unwind orders** (from partial fills) use GTC with 60s `expiration_ts` per phase. Phases cancel-and-replace, so the TTL is a crash safety net.
+
+**Boot close orders** get 60s `expiration_ts`. Priced at extreme values to fill immediately, bounded in case of market halt.
+
 ### Partial Fill Protection
 
-**Buy-side immediate cancel:** When a buy-side arb's batch response has any leg "resting" (no fill), all resting legs are cancelled immediately and filled legs are unwound — no waiting for `fill_timeout_secs`.
+**IOC batch path:** After the batch response, each order is either "executed" (filled) or "cancelled" (IOC rejected). No resting state to monitor. Partial fills (some executed, some cancelled) trigger unwind immediately.
 
 On partial fill (some legs fill, others don't), the executor:
 1. Blacklists the event permanently (no re-execution)
@@ -150,18 +163,21 @@ On partial fill (some legs fill, others don't), the executor:
 
 ### Execution Fidelity — Defense in Depth
 
-Eight layers of timeout protection prevent hanging API calls from freezing the bot:
+Multiple layers of protection prevent orphaned orders and hanging API calls:
 
-1. **HTTP transport** — `aiohttp.ClientTimeout(total=30, connect=10, sock_read=15)` on the session. No HTTP request can hang >30s.
-2. **Executor API calls** — `asyncio.wait_for` on `batch_create_orders` (15s), `batch_cancel_orders` (10s), `get_balance` (10s) inside `execute()` and `_monitor_fills()`.
-3. **Emergency shutdown** — 60s overall timeout, 15s per API call inside. Idempotency guard prevents duplicate concurrent invocations.
-4. **Boot reconcile** — 60s timeout. On timeout, proceeds without full reconciliation.
-5. **WebSocket reconnect** — 30s timeout on `connect()` inside `_reconnect()`.
-6. **Orderbook staleness** — `OrderbookManager.market_age()` tracks seconds since last update. Dispatcher skips signal evaluation when any market in the event is >2s stale.
-7. **SIGTERM handler** — `signal.SIGTERM`/`SIGINT` trigger graceful shutdown: cancel tasks, await unwinds, close connections.
-8. **Recent trades** — 10s initial timeout + 5s retry on `get_market_trades()`. On double timeout or retry failure, treats as "no recent trades" (rejects the signal).
-9. **Sequential leg execution** — Legs executed one at a time, highest price first. If any leg goes resting, cancel it immediately and unwind only the already-filled legs. Eliminates the worst partial-fill scenario where multiple expensive legs fill before a cheap leg fails.
-10. **Ask-side depth check** — `_validate_legs` verifies each market has sufficient ask-side depth (`min_ask_depth`). One-sided markets (bids only, no asks) are rejected as likely stale/phantom.
+1. **IOC taker orders** — All taker orders use `time_in_force: "immediate_or_cancel"`. Fill status known immediately from batch response — no polling, no orphaned resting orders.
+2. **Maker/two-sided order TTL** — Resting orders get `expiration_ts` (default 300s). Exchange auto-cancels if bot crashes or loses track.
+3. **Unwind order TTL** — 60s `expiration_ts` per phase. Safety net for crashes mid-unwind.
+4. **HTTP transport** — `aiohttp.ClientTimeout(total=30, connect=10, sock_read=15)` on the session. No HTTP request can hang >30s.
+5. **Executor API calls** — `asyncio.wait_for` on `batch_create_orders` (15s), `batch_cancel_orders` (10s), `get_balance` (10s) inside `execute()`.
+6. **Emergency shutdown** — 60s overall timeout, 15s per API call inside. Idempotency guard prevents duplicate concurrent invocations. Close orders get 60s `expiration_ts`.
+7. **Boot reconcile** — 60s timeout. Cancels all orphaned resting orders on startup. On timeout, proceeds without full reconciliation.
+8. **WebSocket reconnect** — 30s timeout on `connect()` inside `_reconnect()`.
+9. **Orderbook staleness** — `OrderbookManager.market_age()` tracks seconds since last update. Dispatcher skips signal evaluation when any market in the event is >2s stale.
+10. **SIGTERM handler** — `signal.SIGTERM`/`SIGINT` trigger graceful shutdown: cancel tasks, await unwinds, close connections.
+11. **Recent trades** — 10s initial timeout + 5s retry on `get_market_trades()`. On double timeout or retry failure, treats as "no recent trades" (rejects the signal).
+12. **Sequential leg execution** — Legs executed one at a time, highest price first. If any leg doesn't fill (IOC cancelled), abort and unwind only the already-filled legs.
+13. **Ask-side depth check** — `_validate_legs` verifies each market has sufficient ask-side depth (`min_ask_depth`). One-sided markets (bids only, no asks) are rejected as likely stale/phantom.
 
 ### MCP Server (`src/mcp_server.py`)
 
