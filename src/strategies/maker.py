@@ -31,12 +31,14 @@ class MakerManager:
                  max_events: int = 3, risk_profile=None,
                  tighten_phase1_secs: int = 15, tighten_phase2_secs: int = 30,
                  tighten_step_cents: int = 3, track_fill_id=None,
-                 capital_guard=None, exchange_name: str = "kalshi"):
+                 capital_guard=None, exchange_name: str = "kalshi",
+                 maker_order_ttl_secs: int = 300):
         self.api = api
         self.order_builder = order_builder if order_builder is not None else api
         self._track_fill_id = track_fill_id or (lambda oid: None)
         self._capital_guard = capital_guard
         self._exchange_name = exchange_name
+        self._order_ttl_secs = maker_order_ttl_secs
         if fill_mode not in self.VALID_FILL_MODES:
             logger.warning("Unknown fill_mode %r, falling back to cancel_and_take", fill_mode)
             fill_mode = "cancel_and_take"
@@ -95,8 +97,10 @@ class MakerManager:
                 if signal.event_ticker in self._active:
                     return False
 
+                exp_ts = int(time.time()) + self._order_ttl_secs
                 orders = [
-                    self.order_builder.build_sell_order(ticker, price, 1)
+                    self.order_builder.build_sell_order(ticker, price, 1,
+                                                       expiration_ts=exp_ts)
                     for ticker, price in signal.legs
                 ]
 
@@ -236,7 +240,8 @@ class MakerManager:
 
         if unfilled_tickers:
             taker_orders = [
-                self.order_builder.build_sell_order(t, p, 1)
+                self.order_builder.build_sell_order(t, p, 1,
+                                                   time_in_force="immediate_or_cancel")
                 for t, p in unfilled_tickers
             ]
             resp = await self.api.batch_create_orders(taker_orders)
@@ -258,7 +263,8 @@ class MakerManager:
         for ticker, oid, price in unfilled:
             await self._safe_cancel_order(oid)
             new_price = max(price - step, 0.01)
-            new_order = [self.order_builder.build_sell_order(ticker, new_price, 1)]
+            new_order = [self.order_builder.build_sell_order(ticker, new_price, 1,
+                                                            time_in_force="immediate_or_cancel")]
             resp = await self.api.batch_create_orders(new_order)
             inner = self.order_builder.unwrap_order(resp.get("orders", [{}])[0])
             new_oid = inner.get("order_id", "")
@@ -337,7 +343,9 @@ class MakerManager:
                     continue
                 if abs(new_price - old_price) > 1e-9:
                     await self._safe_cancel_order(oid)
-                    new_order = [self.order_builder.build_sell_order(ticker, new_price, 1)]
+                    exp_ts = int(time.time()) + self._order_ttl_secs
+                    new_order = [self.order_builder.build_sell_order(ticker, new_price, 1,
+                                                                    expiration_ts=exp_ts)]
                     resp = await self.api.batch_create_orders(new_order)
                     new_inner = self.order_builder.unwrap_order(resp.get("orders", [{}])[0])
                     new_oid = new_inner.get("order_id", "")

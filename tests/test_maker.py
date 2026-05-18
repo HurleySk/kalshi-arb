@@ -6,7 +6,7 @@ from src.core.models import TradeSignal, Orderbook
 from src.core.risk import load_risk_profile
 
 
-def _make_maker(max_events=3, fill_mode="cancel_and_take"):
+def _make_maker(max_events=3, fill_mode="cancel_and_take", order_ttl_secs=300):
     api = MagicMock()
     api.batch_create_orders = AsyncMock(return_value={
         "orders": [
@@ -20,11 +20,13 @@ def _make_maker(max_events=3, fill_mode="cancel_and_take"):
     api.cancel_order = AsyncMock(return_value={})
     order_builder = MagicMock()
     order_builder.unwrap_order = MagicMock(side_effect=lambda raw: raw.get("order", raw))
-    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, price, quantity: {
+    order_builder.build_sell_order = MagicMock(side_effect=lambda ticker, price, quantity, **kwargs: {
         "ticker": ticker, "action": "sell", "side": "yes",
         "type": "limit", "yes_price": round(price * 100), "count": quantity,
+        **kwargs,
     })
-    maker = MakerManager(api=api, order_builder=order_builder, fill_mode=fill_mode, max_events=max_events)
+    maker = MakerManager(api=api, order_builder=order_builder, fill_mode=fill_mode,
+                         max_events=max_events, maker_order_ttl_secs=order_ttl_secs)
     return maker, api, order_builder
 
 
@@ -219,3 +221,75 @@ def test_maker_post_rejects_when_over_budget():
     result = asyncio.run(mgr.post(signal))
     assert result is False
     api.batch_create_orders.assert_not_called()
+
+
+def test_post_includes_expiration_ts():
+    """Maker orders should include expiration_ts based on TTL."""
+    maker, api, order_builder = _make_maker(order_ttl_secs=300)
+    signal = _maker_signal()
+    import time
+    before = int(time.time())
+    asyncio.run(maker.post(signal))
+    after = int(time.time())
+
+    calls = order_builder.build_sell_order.call_args_list
+    for call in calls:
+        kwargs = call.kwargs if call.kwargs else {}
+        exp_ts = kwargs.get("expiration_ts")
+        assert exp_ts is not None, "expiration_ts should be set on maker orders"
+        assert before + 300 <= exp_ts <= after + 300
+
+
+def test_reprice_includes_fresh_expiration_ts():
+    """Repriced maker orders should get a fresh expiration_ts."""
+    maker, api, order_builder = _make_maker(order_ttl_secs=300)
+    signal = _maker_signal()
+    asyncio.run(maker.post(signal))
+
+    order_builder.build_sell_order.reset_mock()
+    api.batch_create_orders = AsyncMock(return_value={
+        "orders": [
+            {"order": {"order_id": "mo3", "ticker": "M1", "status": "resting",
+                       "yes_price_dollars": "0.54"}},
+        ]
+    })
+
+    books = {
+        "M1": Orderbook(bids={54: 5}, asks={56: 5}),
+        "M2": Orderbook(bids={51: 5}, asks={53: 5}),
+    }
+    import time
+    maker._active["E1"].last_reprice_time = 0
+    before = int(time.time())
+    asyncio.run(maker.on_orderbook_update("E1", books))
+    after = int(time.time())
+
+    if order_builder.build_sell_order.called:
+        for call in order_builder.build_sell_order.call_args_list:
+            kwargs = call.kwargs if call.kwargs else {}
+            exp_ts = kwargs.get("expiration_ts")
+            assert exp_ts is not None
+            assert before + 300 <= exp_ts <= after + 300
+
+
+def test_complete_cancel_and_take_uses_ioc():
+    """When completing an arb after a fill, the taker orders should use IOC."""
+    maker, api, order_builder = _make_maker()
+    signal = _maker_signal()
+    asyncio.run(maker.post(signal))
+
+    api.batch_create_orders = AsyncMock(return_value={
+        "orders": [
+            {"order": {"order_id": "to1", "ticker": "M2", "status": "executed",
+                       "yes_price_dollars": "0.51"}},
+        ]
+    })
+
+    order_builder.build_sell_order.reset_mock()
+    asyncio.run(maker.handle_fill("mo1", "M1", 0.52, 1))
+
+    if order_builder.build_sell_order.called:
+        for call in order_builder.build_sell_order.call_args_list:
+            kwargs = call.kwargs if call.kwargs else {}
+            tif = kwargs.get("time_in_force")
+            assert tif == "immediate_or_cancel", f"Completion taker orders should be IOC, got {tif}"
